@@ -95,7 +95,11 @@ async def _check_member(bot, channel_ref: str, user_id: int) -> bool:
         try:
             member = await bot.get_chat_member(chat_id=resolve_chat_id(channel_ref), user_id=user_id)
             status = getattr(member, "status", "")
-            return status in _JOINED_STATUSES or status == "restricted"
+            # A restricted user is only a member when Telegram explicitly says so.
+            # Treating every "restricted" status as joined lets non-members bypass the gate.
+            if status == "restricted":
+                return bool(getattr(member, "is_member", False))
+            return status in _JOINED_STATUSES
         except TelegramError as exc:
             last_exc = exc
             if attempt < _RETRIES:
