@@ -327,13 +327,13 @@ def ensure_owner_schema():
         # RBAC migration: extend an OLD extra_admins table (pre-role) safely.
         a_cols = table_columns("extra_admins")
         if "role" not in a_cols:
-            c.execute("ALTER TABLE extra_admins ADD COLUMN role TEXT DEFAULT 'general_supervisor'")
+            c.execute("ALTER TABLE extra_admins ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'general_supervisor'")
         if "granted_by" not in a_cols:
-            c.execute("ALTER TABLE extra_admins ADD COLUMN granted_by INTEGER")
+            c.execute("ALTER TABLE extra_admins ADD COLUMN IF NOT EXISTS granted_by INTEGER")
         if "updated_at" not in a_cols:
-            c.execute("ALTER TABLE extra_admins ADD COLUMN updated_at TEXT")
+            c.execute("ALTER TABLE extra_admins ADD COLUMN IF NOT EXISTS updated_at TEXT")
         if "note" not in a_cols:
-            c.execute("ALTER TABLE extra_admins ADD COLUMN note TEXT DEFAULT ''")
+            c.execute("ALTER TABLE extra_admins ADD COLUMN IF NOT EXISTS note TEXT DEFAULT ''")
 
 
 def ensure_cache_schema():
