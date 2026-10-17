@@ -1495,28 +1495,41 @@ async def _sub_test(context, query):
         "• فحص عضويتك (للمالك) في كل قناة:\n" if chans else "• لا توجد قنوات نشطة بعد.\n",
     ]
     joined = {"creator", "administrator", "member", "restricted"}
+    bot_admin = {"creator", "administrator"}
     all_ok = True
     for ch in chans:
         ref = str(ch.get("channel_ref") or "")
         arg = int(ref) if ref.lstrip("-").isdigit() else ref
         try:
-            member = await context.bot.get_chat_member(chat_id=arg, user_id=int(OWNER_ID))
-            status = getattr(member, "status", "?")
-            icon = "✅" if status in joined else "❌"
-            if icon == "❌":
+            bot_member = await context.bot.get_chat_member(
+                chat_id=arg, user_id=int(context.bot.id))
+            bot_status = getattr(bot_member, "status", "?")
+            if bot_status not in bot_admin:
                 all_ok = False
-            lines.append(f"{icon} <code>{escape(ref)}</code> — حالتك: <code>{escape(status)}</code>")
+                lines.append(
+                    f"🚫 <code>{escape(ref)}</code> — صلاحية البوت: "
+                    f"<code>{escape(bot_status)}</code>؛ لازم تعيّنه مشرفًا.")
+                continue
+            owner_member = await context.bot.get_chat_member(
+                chat_id=arg, user_id=int(OWNER_ID))
+            owner_status = getattr(owner_member, "status", "?")
+            icon = "✅" if owner_status in joined else "ℹ️"
+            lines.append(
+                f"✅ <code>{escape(ref)}</code> — البوت: "
+                f"<code>{escape(bot_status)}</code> • عضويتك: "
+                f"<code>{escape(owner_status)}</code>")
         except Exception as exc:
             all_ok = False
-            lines.append(f"🚫 <code>{escape(ref)}</code> — خطأ: <code>{escape(str(exc)[:110])}</code>")
+            lines.append(
+                f"🚫 <code>{escape(ref)}</code> — فشل فحص البوت/العضوية: "
+                f"<code>{escape(str(exc)[:110])}</code>")
 
     lines.append(
         "\n💡 <b>قراءة النتيجة:</b>\n"
-        "• <code>administrator</code>/<code>member</code> = البوت قادر على فحص العضوية ✓\n"
-        "• <code>left</code> = أنت غير مشترك في هذه القناة (طبيعي كاختبار)\n"
-        "• <code>chat not found</code> أو <code>member list inaccessible</code> = "
-        "البوت <b>ليس مشرفًا</b> في القناة أو المعرّف خاطئ."
-    )
+        "• لازم حالة البوت تكون <code>administrator</code> أو <code>creator</code>.\n"
+        "• لو البوت مجرد <code>member</code>، ارفعه مشرفًا من إعدادات القناة.\n"
+        "• حالة عضويتك أنت منفصلة عن صلاحية البوت في فحص بقية المستخدمين.\n"
+        "• لو ظهر خطأ، راجع معرّف القناة وتأكد أن البوت موجود فيها.")
     await _edit(query, "\n".join(lines), parse_mode="HTML",
                 reply_markup=_kb(_back("own_sub", "🔙 الاشتراك الإجباري")))
     staff = list_extra_admins()
@@ -2558,6 +2571,19 @@ async def owner_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # Telegram treats a numeric-looking string as a @username and fails.
             chat_id_arg = int(ref) if ref.lstrip("-").isdigit() else ref
             chat = await context.bot.get_chat(chat_id_arg)
+            # Telegram only guarantees getChatMember for other users when the bot
+            # is an administrator in the channel. Do not save a channel that cannot
+            # reliably enforce the mandatory-subscription rule.
+            bot_member = await context.bot.get_chat_member(
+                chat_id=chat_id_arg, user_id=int(context.bot.id))
+            bot_status = getattr(bot_member, "status", "")
+            if bot_status not in ("administrator", "creator"):
+                await update.message.reply_text(
+                    "⚠️ البوت موجود في القناة لكنه ليس مشرفًا.\n\n"
+                    "ارفع البوت إلى مشرف في القناة، ثم أعد إضافة القناة. "
+                    "لازم صلاحية المشرف عشان يقدر يتحقق من اشتراك المستخدمين.",
+                    reply_markup=_kb(_back("own_sub", "🔙 رجوع")))
+                return True
             title = (getattr(chat, "title", "") or "").strip()
             uname = getattr(chat, "username", None)
             invite = (getattr(chat, "invite_link", "") or "").strip()
