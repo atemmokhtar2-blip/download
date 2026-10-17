@@ -139,6 +139,13 @@ async def enforce_subscription(update, context, user) -> bool:
     """
     from middlewares.auth import is_admin, is_banned
 
+    # The policy applies to the MAIN bot. Clone instances are out of scope for
+    # now — per-instance channel lists are layered on later via instance_id
+    # (the storage schema already carries it, so no migration will be needed).
+    from services.instance_manager import is_clone_bot
+    if is_clone_bot(getattr(getattr(context, "bot", None), "username", None)):
+        return True
+
     if is_admin(user.id) or is_banned(user.id):
         return True
 
@@ -174,6 +181,11 @@ async def subscription_check_callback(update, context: ContextTypes.DEFAULT_TYPE
     """'✅ انضميت — تحقق الآن' — re-verify and either confirm or re-prompt."""
     query = update.callback_query
     user = query.from_user
+    # Same scope as enforce_subscription: the main bot only.
+    from services.instance_manager import is_clone_bot
+    if is_clone_bot(getattr(getattr(context, "bot", None), "username", None)):
+        await query.answer("✅ لا يوجد اشتراك إجباري في هذه النسخة.")
+        return
     channels = _active_global_channels()
     if not channels:
         await query.answer("✅ لا يوجد اشتراك إجباري مفعل.")
