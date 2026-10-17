@@ -30,7 +30,7 @@ _MISSING_DSN_ERROR = (
 # ``cursor.lastrowid`` keeps working.
 _ID_RETURN_TABLES = {
     "downloads", "file_cache", "broadcast_log", "admin_audit_log",
-    "support_tickets", "support_ticket_messages",
+    "support_tickets", "support_ticket_messages", "mandatory_channels",
 }
 
 _RE_DT_CONCAT_DAYS = re.compile(
@@ -297,6 +297,8 @@ def init_db():
     logger.info("Database initialized on backend=%s", backend_name())
     ensure_cache_schema()
     ensure_owner_schema()
+    from .subscription import ensure_subscription_schema
+    ensure_subscription_schema()
 
 
 def ensure_owner_schema():

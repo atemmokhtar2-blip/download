@@ -24,6 +24,7 @@ from database.cache import (
     resolve_cached_delivery, set_cache_with_meta, make_fingerprint,
 )
 from services.media_vault import archive_to_vault, deliver_from_vault, get_storage_channel_id
+from services.subscription_gate import enforce_subscription
 from services.downloader import (
     analyze_url, download_video, download_audio, download_image,
     download_album, FileTooLargeError, DownloadImpossibleError,
@@ -159,6 +160,11 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
     db_user = get_user(user.id)
     lang = db_user.get("language", "en") if db_user else "en"
 
+    # 🔒 Forced channel subscription — single choke point for single-URL,
+    # batch, and search-result analysis. Fail-closed, never bypasses.
+    if not await enforce_subscription(update, context, user):
+        return
+
     if is_banned(user.id):
         await msg.reply_text(t(lang, "banned"))
         return
@@ -287,6 +293,10 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_batch_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process multiple URLs from a single message, one card per link."""
     user = update.effective_user
+    # 🔒 Forced channel subscription — checked before the batch banner so a
+    # non-subscriber never sees partial processing of their message.
+    if not await enforce_subscription(update, context, user):
+        return
     text = (update.message.text or "").strip()
     # Plan batch cap — server-side, from the RUNNING bot's instance row:
     # Basic 3 links / Pro 10 / main the global setting. Never the raw global.
@@ -601,6 +611,11 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = db_user.get("language", "en") if db_user else "en"
     settings = get_user_settings(user.id)
     data = query.data
+
+    # 🔒 Forced channel subscription — re-verified on every download press too
+    # (a stale action card from before the rule changed must not still work).
+    if not await enforce_subscription(update, context, user):
+        return
 
     # Batch/search messages embed a per-message token so each inline keyboard
     # binds to its own analysis even when several cards are present.

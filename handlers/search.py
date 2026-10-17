@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 
 from middlewares.auth import is_banned
 from middlewares.concurrency import get_executor
+from services.subscription_gate import enforce_subscription
 from locales import t
 from utils.telegram_safe import safe_edit
 
@@ -75,6 +76,9 @@ def _search_ytdlp(query: str, limit: int = 10) -> list[dict]:
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    # 🔒 Forced channel subscription gate.
+    if not await enforce_subscription(update, context, user):
+        return
     if is_banned(user.id):
         await update.message.reply_text(t("ar", "banned"), parse_mode="HTML")
         return

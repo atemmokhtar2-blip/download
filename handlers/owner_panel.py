@@ -25,6 +25,7 @@ import csv
 import io
 import logging
 import os
+import re
 import time
 from datetime import datetime
 from html import escape
@@ -56,6 +57,7 @@ from database.bot_settings import (
     remove_extra_admin, get_extra_admin,
 )
 from database import support
+from database import subscription as sub_db
 from services import referral
 from services import rbac
 from services.instance_manager import is_clone_bot, spawn_instance, stop_instance
@@ -1415,6 +1417,7 @@ def _set_screen() -> tuple[str, InlineKeyboardMarkup]:
     text = "\u2063"
     keyboard = _kb([
         [inline_button("🛡️ إدارة المشرفين والرتب", callback_data="own_set_perms")],
+        [inline_button("📡 الاشتراك الإجباري", callback_data="own_sub")],
         [inline_button("🔴 تفعيل وضع الصيانة", callback_data="own_set_maint_on"),
          inline_button("🟢 إيقاف الصيانة", callback_data="own_set_maint_off")],
         [inline_button("🎯 قواعد الإحالات والهدف", callback_data="own_set_target")],
@@ -1424,6 +1427,59 @@ def _set_screen() -> tuple[str, InlineKeyboardMarkup]:
         [inline_button("🔙 مركز التحكم الرئيسي", callback_data="own_home")],
     ])
     return text, keyboard
+
+
+def _parse_channel_ref(text: str) -> str | None:
+    """Normalize owner input into a channel ref usable by get_chat_member.
+
+    Accepts public @usernames, public t.me links, and numeric chat IDs.
+    Private ``t.me/+hash`` links are intentionally rejected: the Bot API cannot
+    verify membership against an invite-hash, so the owner must send the numeric
+    chat ID for private channels.
+    """
+    t = (text or "").strip()
+    if not t:
+        return None
+    m = re.match(r"^https?://t\.me/([A-Za-z0-9_]+)/?$", t)
+    if m:
+        return "@" + m.group(1)
+    if t.startswith("@") and len(t) > 1 and re.match(r"^@[A-Za-z0-9_]+$", t):
+        return t
+    if t.lstrip("-").isdigit():
+        return t
+    return None
+
+
+def _sub_screen() -> tuple[str, InlineKeyboardMarkup]:
+    chans = sub_db.list_channels(0)
+    enabled = sub_db.subscription_enabled()
+    text = (
+        "📡 <b>الاشتراك الإجباري</b>\n\n"
+        f"• الحالة: {'🟢 <b>مفعّل</b>' if enabled else '⚫ <b>موقوف</b>'}\n"
+        f"• القنوات المطلوبة: <b>{len(chans)}</b>\n"
+        "• النطاق: <b>البوت الرئيسي — كل المستخدمين غير الإداريين</b>\n"
+        "• عند تعطّل التحقق: <b>وضع آمن</b> (لا يُعتبر مؤكدًا + تنبيه للمالك)\n\n"
+    )
+    if chans:
+        text += "<b>القنوات:</b>\n"
+        for ch in chans:
+            icon = "✅" if ch.get("enabled") else "🚫"
+            ref = escape(str(ch.get("channel_ref") or "?"))
+            title = escape(str(ch.get("title") or "بدون عنوان")[:32])
+            text += f"{icon} <code>{ref}</code> — {title} [<code>{ch.get('id')}</code>]\n"
+    else:
+        text += "<b>القنوات:</b> لا توجد قنوات — الشرط لن يُطبَّق حتى تضيف قناة واحدة على الأقل.\n"
+    rows = [
+        [inline_button("➕ إضافة قناة", callback_data="own_sub_add"),
+         inline_button("🔘 إيقاف" if enabled else "🔘 تفعيل", callback_data="own_sub_toggle")],
+    ]
+    for ch in chans[:10]:
+        rows.append([inline_button(
+            f"🗑 حذف {ch.get('channel_ref') or ch.get('id')}",
+            callback_data=f"own_sub_del_{ch.get('id')}")])
+    rows.append([inline_button("🔙 الإعدادات", callback_data="own_set")])
+    return text, _kb(rows)
+
 
 def _perms_screen() -> tuple[str, InlineKeyboardMarkup]:
     staff = list_extra_admins()
@@ -2172,6 +2228,39 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "own_rbac_log":
         text, kb = _rbac_log_screen()
         await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+
+    # ---- forced subscription management (owner-only) ----
+    elif data == "own_sub":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _sub_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_sub_add":
+        OWNER_STATES[uid] = "sub_add"
+        await _edit(query,
+            "📡 <b>إضافة قناة اشتراك</b>\n\n"
+            "أرسل الآن:\n"
+            "• يوزرنيم قناة عامة: <code>@channel</code>\n"
+            "• أو رابط عام: <code>https://t.me/channel</code>\n"
+            "• أو معرّف رقمي: <code>-100123456789</code>\n\n"
+            "⚠️ القنوات الخاصة (<code>t.me/+hash</code>) تحتاج المعرّف الرقمي — "
+            "رابط الدعوة وحده لا يكفي للتحقق الآمن.",
+            parse_mode="HTML", reply_markup=_kb(_back("own_sub", "🔙 إلغاء")))
+    elif data == "own_sub_toggle":
+        now_on = not sub_db.subscription_enabled()
+        sub_db.set_subscription_enabled(now_on)
+        log_admin_action(uid, "owner_sub_toggle", detail=f"enabled={now_on}")
+        text, kb = _sub_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("own_sub_del_"):
+        cid = _suffix_int(data)
+        ch = sub_db.get_channel(cid) if cid else None
+        if cid:
+            sub_db.remove_channel(cid)
+            log_admin_action(uid, "owner_sub_del",
+                             detail=f"channel={ch.get('channel_ref') if ch else cid}")
+        text, kb = _sub_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+
     elif data == "own_audit":
         await _audit_screen(query)
     elif data == "own_set_target":
@@ -2406,6 +2495,36 @@ async def owner_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return True
         t2, kb2 = _rbac_role_picker(target_id, back="own_set_perms")
         await update.message.reply_text(t2, parse_mode="HTML", reply_markup=kb2)
+        return True
+
+    if state == "sub_add":
+        ref = _parse_channel_ref(text)
+        if not ref:
+            await update.message.reply_text(
+                "⚠️ أرسل يوزرنيم قناة عامة (<code>@channel</code>) أو رابطًا عامًا "
+                "(<code>https://t.me/channel</code>) أو معرّفًا رقميًا "
+                "(<code>-100123456789</code>).\n\n"
+                "قنوات <code>t.me/+hash</code> الخاصة تحتاج المعرّف الرقمي للقناة.",
+                parse_mode="HTML", reply_markup=_kb(_back("own_sub", "🔙 إلغاء")))
+            return True
+        title, invite = "", ""
+        try:
+            chat = await context.bot.get_chat(ref)
+            title = (getattr(chat, "title", "") or "").strip()
+            uname = getattr(chat, "username", None)
+            invite = (getattr(chat, "invite_link", "") or "").strip()
+            if not invite and uname:
+                invite = f"https://t.me/{uname}"
+        except Exception as exc:
+            await update.message.reply_text(
+                "⚠️ تعذّر الوصول للقناة — تأكد أن البوت عضو/مشرف فيها والرابط صحيح.\n"
+                f"<code>{escape(str(exc)[:120])}</code>",
+                parse_mode="HTML", reply_markup=_kb(_back("own_sub", "🔙 إلغاء")))
+            return True
+        sub_db.add_channel(0, ref, title, invite, added_by=uid)
+        log_admin_action(uid, "owner_sub_add", detail=f"channel={ref} title={title[:40]}")
+        text2, kb2 = _sub_screen()
+        await update.message.reply_text(text2, parse_mode="HTML", reply_markup=kb2)
         return True
 
     if state == "target":

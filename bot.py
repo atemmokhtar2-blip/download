@@ -36,6 +36,7 @@ from handlers.referral import (
     referral_callback, try_handle_code_message, try_handle_token_message,
 )
 from handlers.owner_panel import owner_command, owner_callback, owner_text_handler, warroom_command
+from services.subscription_gate import subscription_check_callback
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache, cleanup_old_history, clone_expiry_worker
 
 # Arabic-only main menu. Matching is emoji-insensitive (see normalize_button_text)
@@ -241,6 +242,7 @@ def build_application(token: str | None = None, clone: bool = False) -> Applicat
     app.add_handler(CommandHandler("find", search_command))
 
     app.add_handler(CallbackQueryHandler(noop_callback, pattern="^noop$"))
+    app.add_handler(CallbackQueryHandler(subscription_check_callback, pattern="^sub_check"))
     # Owner callbacks are matched BEFORE admin ones and re-verify is_owner
     # in code on every single press (never trust a hidden button).
     app.add_handler(CallbackQueryHandler(owner_callback, pattern="^own_"))

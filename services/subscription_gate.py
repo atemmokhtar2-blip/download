@@ -1,0 +1,196 @@
+"""Forced channel subscription gate (main bot) — owner-approved policy.
+
+  * Main-bot-wide: applies to every non-admin, non-banned user.
+  * Flexible channel list (per ``instance_id``; 0 = global main bot).
+  * FAIL-CLOSED verification: on ANY Telegram error we retry, alert the
+    owner, and NEVER assume the subscription is confirmed. There is no
+    bypass path — a broken verification only blocks access, it never grants it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from html import escape
+
+from telegram import InlineKeyboardMarkup
+from telegram.error import TelegramError
+from telegram.ext import ContextTypes
+from utils.button_text import inline_button
+
+logger = logging.getLogger(__name__)
+
+_RETRIES = 2
+_JOINED_STATUSES = {"creator", "administrator", "member"}
+# One owner alert per channel every 5 minutes max (avoid request-storm spam).
+_OWNER_ALERT_COOLDOWN: dict[str, float] = {}
+
+
+def _join_url(ch: dict) -> str:
+    if ch.get("invite_link"):
+        return ch["invite_link"]
+    ref = (ch.get("channel_ref") or "").strip()
+    if ref.startswith("@"):
+        return f"https://t.me/{ref[1:].strip()}"
+    return ref
+
+
+async def _alert_owner(bot, channel_ref: str, error: str) -> None:
+    from config.settings import OWNER_ID
+    from database.admin_audit import log_admin_action
+
+    key = str(channel_ref or "").strip()
+    now = time.monotonic()
+    if now - _OWNER_ALERT_COOLDOWN.get(key, 0.0) < 300:
+        return
+    _OWNER_ALERT_COOLDOWN[key] = now
+
+    try:
+        log_admin_action(0, "subscription_verify_error",
+                         detail=f"channel={channel_ref[:60]} err={error[:120]}")
+    except Exception:
+        pass
+
+    try:
+        await bot.send_message(
+            int(OWNER_ID),
+            "⚠️ <b>تعذّر التحقق من قناة الاشتراك الإجباري</b>\n\n"
+            f"• القناة: <code>{escape(channel_ref[:80])}</code>\n"
+            f"• الخطأ: <code>{escape(error[:160])}</code>\n\n"
+            "🛡 <b>الوضع الآمن مفعّل:</b> الاشتراك لا يُعتبر مؤكدًا، ولن يتم "
+            "تجاوز الشرط حتى يعود التحقق للعمل. تحقق أن البوت مشرف/عضو في القناة "
+            "وأن التوكن سليم.",
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.warning("owner subscription alert failed: %s", exc)
+
+
+async def _check_member(bot, channel_ref: str, user_id: int) -> bool:
+    """True when the user has joined; raises after retries on Telegram errors."""
+    last_exc: Exception | None = None
+    for attempt in range(_RETRIES + 1):
+        try:
+            member = await bot.get_chat_member(chat_id=channel_ref, user_id=user_id)
+            status = getattr(member, "status", "")
+            return status in _JOINED_STATUSES or status == "restricted"
+        except TelegramError as exc:
+            last_exc = exc
+            if attempt < _RETRIES:
+                await asyncio.sleep(1 + attempt)
+                continue
+    raise last_exc if last_exc else RuntimeError("subscription verification failed")
+
+
+async def _verify(bot, user_id: int, channels: list[dict]):
+    """Return (missing, errored). ``errored`` entries are (channel, error_text)."""
+    missing: list[dict] = []
+    errored: list[tuple[dict, str]] = []
+    for ch in channels:
+        ref = ch.get("channel_ref") or ""
+        try:
+            if not await _check_member(bot, ref, user_id):
+                missing.append(ch)
+        except Exception as exc:
+            err = str(exc)[:160]
+            errored.append((ch, err))
+            await _alert_owner(bot, ref, err)
+    return missing, errored
+
+
+async def _send_prompt(message, channels, verification_error: bool) -> None:
+    rows = []
+    for ch in channels:
+        label = (ch.get("title") or ch.get("channel_ref") or "قناة").strip()
+        url = _join_url(ch)
+        rows.append([inline_button(f"➕ {label}", url=url)])
+    rows.append([inline_button("✅ انضميت — تحقق الآن", callback_data="sub_check")])
+
+    text = "🔒 <b>هذه الميزة تتطلب الاشتراك</b>\n\n"
+    if verification_error:
+        text += (
+            "⚠️ تعذّر التحقق من اشتراكك مؤقتًا. أعد المحاولة بعد قليل.\n"
+            "لن يتم تجاوز الشرط حتى ينجح التحقق.\n\n"
+        )
+    text += "اشترك في القنوات التالية، ثم اضغط <b>«انضميت — تحقق الآن»</b>:"
+
+    try:
+        await message.reply_text(
+            text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(rows),
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        logger.warning("subscription prompt failed: %s", exc)
+
+
+def _active_global_channels() -> list[dict]:
+    from database import subscription as db
+    return db.list_channels(0, enabled_only=True)
+
+
+async def enforce_subscription(update, context, user) -> bool:
+    """Enforce forced channel subscription for one action.
+
+    Returns True when the action may proceed; False when a prompt was sent and
+    the caller MUST stop. Admins, banned users, and disabled/empty config are
+    passed through untouched (banned users get their normal ban message).
+    """
+    from middlewares.auth import is_admin, is_banned
+
+    if is_admin(user.id) or is_banned(user.id):
+        return True
+
+    from database import subscription as db
+    if not db.subscription_enabled():
+        return True
+
+    channels = _active_global_channels()
+    if not channels:
+        return True
+
+    missing, errored = await _verify(context.bot, user.id, channels)
+    if not missing and not errored:
+        return True
+
+    # Stop any pending inline spinner before replying, so the button never hangs.
+    if getattr(update, "callback_query", None):
+        try:
+            await update.callback_query.answer()
+        except Exception:
+            pass
+
+    message = update.effective_message
+    if message is None:
+        return False
+    # Show ALL configured channels (the user may have missed joining one even
+    # when another channel errored during verification).
+    await _send_prompt(message, channels, verification_error=bool(errored))
+    return False
+
+
+async def subscription_check_callback(update, context: ContextTypes.DEFAULT_TYPE):
+    """'✅ انضميت — تحقق الآن' — re-verify and either confirm or re-prompt."""
+    query = update.callback_query
+    user = query.from_user
+    channels = _active_global_channels()
+    if not channels:
+        await query.answer("✅ لا يوجد اشتراك إجباري مفعل.")
+        return
+
+    missing, errored = await _verify(context.bot, user.id, channels)
+    if not missing and not errored:
+        await query.answer("✅ تم التحقق بنجاح!")
+        try:
+            await query.edit_message_text(
+                "✅ <b>تم التحقق من اشتراكك!</b>\n\nأرسل رابط التحميل أو استخدم /search.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        return
+
+    await query.answer()
+    if query.message:
+        await _send_prompt(query.message, channels, verification_error=bool(errored))
