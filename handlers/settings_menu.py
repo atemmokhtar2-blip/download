@@ -463,6 +463,9 @@ def build_saved(field: str, value: str, back_cb: str = "settings:home") -> tuple
 # ---- command entry ---------------------------------------------------------
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from services.subscription_gate import enforce_subscription
+    if not await enforce_subscription(update, context, update.effective_user):
+        return
     uid = update.effective_user.id
     # Opening the menu cancels any pending free-text input (e.g. custom size)
     # so the user can never get stuck answering an old prompt.
@@ -539,6 +542,9 @@ async def try_handle_settings_text(update: Update, context: ContextTypes.DEFAULT
 
 async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    from services.subscription_gate import enforce_subscription
+    if not await enforce_subscription(update, context, query.from_user):
+        return
     uid = query.from_user.id
     data = query.data or ""
     await query.answer()
