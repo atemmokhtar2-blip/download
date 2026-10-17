@@ -138,7 +138,7 @@ async def _send_prompt(message, channels, verification_error: bool) -> None:
                 pass
     rows.append([inline_button("✅ انضميت — تحقق الآن", callback_data="sub_check")])
 
-    text = "🔒 <b>هذه الميزة تتطلب الاشتراك</b>\n\n"
+    text = "🔒 <b>اشترك في القناة لاستخدام البوت</b>\n\n"
     if verification_error:
         text += (
             "⚠️ تعذّر التحقق من اشتراكك مؤقتًا. أعد المحاولة بعد قليل.\n"
@@ -204,12 +204,18 @@ async def enforce_subscription(update, context, user) -> bool:
         [str(c.get("channel_ref")) for c, _ in errored],
     )
 
-    # Stop any pending inline spinner before replying, so the button never hangs.
+    # A failed callback check should show an alert, not another copy of the prompt.
     if getattr(update, "callback_query", None):
         try:
-            await update.callback_query.answer()
+            await update.callback_query.answer(
+                "تعذّر التحقق من الاشتراك. حاول مرة أخرى بعد قليل."
+                if errored else
+                "أنت لم تشترك في القناة بعد. اشترك أولًا ثم اضغط تحقق الآن.",
+                show_alert=True,
+            )
         except Exception:
             pass
+        return False
 
     message = update.effective_message
     if message is None:
@@ -246,6 +252,14 @@ async def subscription_check_callback(update, context: ContextTypes.DEFAULT_TYPE
             pass
         return
 
-    await query.answer()
-    if query.message:
-        await _send_prompt(query.message, channels, verification_error=bool(errored))
+    # Keep the original prompt in place; report failure in a Telegram alert.
+    if errored:
+        await query.answer(
+            "تعذّر التحقق من الاشتراك حاليًا. حاول مرة أخرى بعد قليل.",
+            show_alert=True,
+        )
+    else:
+        await query.answer(
+            "❌ لم يتم العثور على اشتراكك. اشترك في القناة ثم اضغط تحقق الآن.",
+            show_alert=True,
+        )
