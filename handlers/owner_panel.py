@@ -2580,13 +2580,27 @@ async def owner_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return True
         sub_db.add_channel(0, ref, title, invite, added_by=uid)
         log_admin_action(uid, "owner_sub_add", detail=f"channel={ref} title={title[:40]}")
+
+        # 🔑 Auto-activate the whole rule: adding a channel is the owner's
+        # clear intent to enforce it. Without this, "add channel" left the
+        # master switch OFF and every non-member sailed straight through —
+        # the exact "not blocking" bug that was reported.
+        auto_note = ""
+        if not sub_db.subscription_enabled():
+            sub_db.set_subscription_enabled(True)
+            log_admin_action(uid, "owner_sub_autoenable", detail=f"channel={ref}")
+            auto_note = (
+                "\n\n🟢 <b>تم تفعيل الاشتراك الإجباري تلقائيًا</b>\n"
+                "كل مستخدم غير مشترك سيُطلب منه الانضمام الآن."
+            )
+
         await update.message.reply_text(
-            "✅ <b>تمت إضافة القناة</b>\n\n"
+            "✅ <b>تمت إضافة القناة وتفعيل الاشتراك</b>\n\n"
             f"• القناة: <code>{escape(ref)}</code>\n"
             f"• العنوان: {escape(title[:60]) or '—'}\n"
             + (f"• رابط الدعوة: {escape(invite[:140])}\n" if invite
                else "⚠️ لم نستطع توليد رابط دعوة لهذه القناة الخاصة — أضف المستخدمين إليها يدويًا.\n")
-            + "\nافتح «عرض القنوات» وتأكد أن المفتاح <b>مفعّل</b>، ثم استخدم «🔎 فحص فعلي» للتحقق.",
+            + auto_note,
             parse_mode="HTML",
             reply_markup=_kb([
                 [inline_button("📡 عرض القنوات", callback_data="own_sub"),

@@ -181,15 +181,24 @@ async def enforce_subscription(update, context, user) -> bool:
 
     from database import subscription as db
     if not db.subscription_enabled():
+        logger.info("force-sub: rule disabled — uid=%s passes", user.id)
         return True
 
     channels = _active_global_channels()
     if not channels:
+        logger.info("force-sub: no active channels — uid=%s passes", user.id)
         return True
 
     missing, errored = await _verify(context.bot, user.id, channels)
     if not missing and not errored:
         return True
+
+    logger.info(
+        "force-sub: uid=%s blocked (missing=%s, verify_errors=%s)",
+        user.id,
+        [str(c.get("channel_ref")) for c in missing],
+        [str(c.get("channel_ref")) for c, _ in errored],
+    )
 
     # Stop any pending inline spinner before replying, so the button never hangs.
     if getattr(update, "callback_query", None):
