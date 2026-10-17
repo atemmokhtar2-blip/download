@@ -117,6 +117,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await admin_command(update, context)
             return
 
+    # Enforce mandatory subscription on /start as well as download/search actions.
+    # The gate itself exempts configured admins and skips clone instances.
+    try:
+        from services.subscription_gate import enforce_subscription
+        if not await enforce_subscription(update, context, user):
+            return
+    except Exception:
+        # Fail closed if the mandatory-subscription system itself errors.
+        logger.exception("mandatory subscription gate failed on /start uid=%s", user.id)
+        await update.message.reply_text(
+            "⚠️ تعذّر التحقق من الاشتراك الإجباري مؤقتًا. حاول مرة أخرى بعد قليل."
+        )
+        return
+
     # 📦 Clone plan enforcement touches /start too: a user banned from THIS
     # clone instance gets a clear notice instead of the normal welcome.
     try:
