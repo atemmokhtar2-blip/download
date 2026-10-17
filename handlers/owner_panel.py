@@ -2123,8 +2123,13 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         role = _rbac_role(data)
         if not target_id or role not in rbac.GRANTABLE_ROLES:
             return
-        if target_id == OWNER_ID:
-            await query.answer("👑 المالك الأساسي ثابت من البيئة — لا يمكن منحه رتبة.", show_alert=True)
+        if target_id <= 0:
+            await query.answer("⚠️ أرسل Telegram ID صحيحًا.", show_alert=True)
+            return
+        if target_id == OWNER_ID or target_id in set(ADMIN_IDS):
+            await query.answer("🔒 حساب المالك وأدمن البيئة ثابتان من الاستضافة ولا تُغيّر رتبتهما هنا.", show_alert=True)
+            log_admin_action(uid, "owner_rbac_protected_target_denied", target_id,
+                             detail=f"محاولة منح/تغيير رتبة={role} لحساب ثابت")
             return
         old = None
         try:
@@ -2142,11 +2147,21 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = _rbac_id(data, 1)
         if not target_id:
             return
+        if target_id == OWNER_ID or target_id in set(ADMIN_IDS):
+            await query.answer("🔒 حساب المالك أو أدمن البيئة ثابت ولا يُدار من هنا.", show_alert=True)
+            log_admin_action(uid, "owner_rbac_protected_target_denied", target_id,
+                             detail="محاولة تعديل حساب ثابت من البيئة")
+            return
         text, kb = _rbac_revoke_confirm(target_id)
         await _edit(query, text, parse_mode="HTML", reply_markup=kb)
     elif data.startswith("own_rbac_deldo:"):
         target_id = _rbac_id(data, 1)
         if not target_id:
+            return
+        if target_id == OWNER_ID or target_id in set(ADMIN_IDS):
+            await query.answer("🔒 حساب المالك أو أدمن البيئة ثابت ولا يُدار من هنا.", show_alert=True)
+            log_admin_action(uid, "owner_rbac_protected_target_denied", target_id,
+                             detail="محاولة عزل حساب ثابت من البيئة")
             return
         existing = get_extra_admin(target_id) or {}
         old_role = existing.get("role") or "observer"
@@ -2381,9 +2396,12 @@ async def owner_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text("⚠️ أرسل ID رقميًا فقط.")
             return True
         target_id = int(text)
-        if target_id == OWNER_ID:
+        if target_id <= 0:
+            await update.message.reply_text("⚠️ أرسل Telegram ID موجبًا وصحيحًا.")
+            return True
+        if target_id == OWNER_ID or target_id in set(ADMIN_IDS):
             await update.message.reply_text(
-                "👑 المالك الأساسي ثابت من البيئة ولا يحتاج رتبة — اختر مستخدمًا آخر.",
+                "🔒 هذا الحساب ثابت من إعدادات الاستضافة ولا يمكن تغيير رتبته من البوت. أرسل ID لمستخدم آخر.",
                 reply_markup=_kb(_back("own_set_perms", "🔙 الرتب")))
             return True
         t2, kb2 = _rbac_role_picker(target_id, back="own_set_perms")
