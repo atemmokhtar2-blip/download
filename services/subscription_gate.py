@@ -245,7 +245,7 @@ async def subscription_check_callback(update, context: ContextTypes.DEFAULT_TYPE
         await query.answer("✅ تم التحقق بنجاح!")
         try:
             await query.edit_message_text(
-                "✅ <b>تم التحقق من اشتراكك!</b>\n\nأرسل رابط التحميل أو استخدم /search.",
+                "✅ <b>تم التحقق من اشتراكك!</b>\n\nاضغط /start لبدء استخدام البوت.",
                 parse_mode="HTML",
             )
         except Exception:
