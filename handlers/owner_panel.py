@@ -53,10 +53,11 @@ from database.downloads import (
 from database.broadcast import log_broadcast, get_broadcast_history
 from database.bot_settings import (
     get_setting, set_setting, list_extra_admins, add_extra_admin,
-    remove_extra_admin,
+    remove_extra_admin, get_extra_admin,
 )
 from database import support
 from services import referral
+from services import rbac
 from services.instance_manager import is_clone_bot, spawn_instance, stop_instance
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,23 @@ def _suffix_int(data: str) -> int | None:
         return int(data.rsplit("_", 1)[-1])
     except (TypeError, ValueError):
         return None
+
+
+def _rbac_id(data: str, index: int) -> int | None:
+    """Extract a numeric segment from colon-delimited RBAC callbacks
+    (e.g. ``own_rbac_exec:123456:deputy_owner``)."""
+    parts = (data or "").split(":")
+    try:
+        return int(parts[index])
+    except (IndexError, ValueError):
+        return None
+
+
+def _rbac_role(data: str) -> str:
+    """Extract the role slug from the last segment of an RBAC callback."""
+    parts = (data or "").split(":")
+    role = parts[-1] if len(parts) > 1 else ""
+    return role if role in rbac.ROLE_DEFS else "observer"
 
 
 # ---- the gate ------------------------------------------------------------------
@@ -1396,7 +1414,7 @@ def _set_screen() -> tuple[str, InlineKeyboardMarkup]:
     """Button-first settings hub. Every button maps to an existing, owner-gated action."""
     text = "\u2063"
     keyboard = _kb([
-        [inline_button("🛡 الصلاحيات والأدمن", callback_data="own_set_perms")],
+        [inline_button("🛡️ إدارة المشرفين والرتب", callback_data="own_set_perms")],
         [inline_button("🔴 تفعيل وضع الصيانة", callback_data="own_set_maint_on"),
          inline_button("🟢 إيقاف الصيانة", callback_data="own_set_maint_off")],
         [inline_button("🎯 قواعد الإحالات والهدف", callback_data="own_set_target")],
@@ -1408,22 +1426,148 @@ def _set_screen() -> tuple[str, InlineKeyboardMarkup]:
     return text, keyboard
 
 def _perms_screen() -> tuple[str, InlineKeyboardMarkup]:
-    extra = list_extra_admins()
-    lines = [
-        f"• <code>{a['user_id']}</code> • أُضيف: {(a.get('added_at') or '—')[:16]}"
-        for a in extra
-    ] or ["• لا يوجد أدمن ممنوحون حاليًا."]
+    staff = list_extra_admins()
     text = (
-        "🛡 <b>الصلاحيات</b>\n\n"
-        f"👑 المالك الأساسي: <code>{OWNER_ID}</code> — <b>ثابت من البيئة، لا يمكن تعديله من البوت</b>\n"
-        f"🛡 أدمن البيئة: <code>{', '.join(str(a) for a in ADMIN_IDS) or '—'}</code>\n\n"
-        "<b>أدمن ممنوحون من المالك (قابلون للسحب)</b>\n" + "\n".join(lines)
-        + "\n\n⚠️ منح/سحب الأدمن يُسجل في سجل الأمان فورًا."
+        "🛡️ <b>إدارة المشرفين والرتب</b>\n\n"
+        f"👑 <b>المالك الأساسي:</b> <code>{OWNER_ID}</code>\n"
+        "   ↳ ثابت من البيئة — لا يمكن تعيينه أو سحبه أو تعديله من البوت\n\n"
+        f"🛡️ <b>أدمن البيئة (ADMIN_IDS):</b> "
+        f"<code>{', '.join(str(a) for a in ADMIN_IDS) or '—'}</code>\n"
+        "   ↳ رتبة مشرف عام ثابتة من الإعدادات\n\n"
+        "<b>🎖️ المشرفون الممنوحون:</b>\n"
     )
-    rows = [[inline_button("➕ منح أدمن جديد", callback_data="own_set_perm_add")]]
-    for a in extra[:8]:
-        rows.append([inline_button(f"❌ سحب {a['user_id']}", callback_data=f"own_set_perm_del_{a['user_id']}")])
-    rows.append([inline_button("🔙 الإعدادات", callback_data="own_set")])
+    if staff:
+        for a in staff[:15]:
+            role = a.get("role") or "general_supervisor"
+            info = rbac.role_info(role)
+            text += (
+                f"• {info['emoji']} <b>{info['label']}</b> — <code>{a['user_id']}</code>\n"
+                f"   ↳ أُضيف: {_format_timestamp(a.get('added_at'))}"
+            )
+            if a.get("granted_by"):
+                text += f" • بواسطة: <code>{a['granted_by']}</code>"
+            text += "\n"
+    else:
+        text += "• لا يوجد مشرفون ممنوحون حاليًا.\n"
+    text += (
+        "\n🔐 <b>حماية المالك الأساسي:</b>\n"
+        "• رتبة «المالك» لا تُمنح عبر البوت إطلاقًا\n"
+        "• أدمن البيئة والمالك خارج نطاق التعديل من اللوحة\n"
+        "• كل منح/تغيير/عزل يُسجل في سجل الأمان فورًا"
+    )
+    rows = [[inline_button("➕ منح مشرف جديد", callback_data="own_rbac_add")]]
+    for a in staff[:12]:
+        rows.append([
+            inline_button(f"🎖️ رتبة {a['user_id']}", callback_data=f"own_rbac_role:{a['user_id']}"),
+            inline_button(f"❌ عزل {a['user_id']}", callback_data=f"own_rbac_del:{a['user_id']}"),
+        ])
+    rows.append([
+        inline_button("📜 سجل عمليات الرتب", callback_data="own_rbac_log"),
+        inline_button("🔙 الإعدادات", callback_data="own_set"),
+    ])
+    return text, _kb(rows)
+
+
+def _rbac_role_picker(target_id: int, back: str) -> tuple[str, InlineKeyboardMarkup]:
+    cur = None
+    try:
+        staff = get_extra_admin(target_id)
+        cur = staff.get("role") if staff else None
+    except Exception:
+        pass
+    rows = []
+    for role in rbac.GRANTABLE_ROLES:
+        info = rbac.role_info(role)
+        mark = " ✅ (الحالية)" if role == cur else ""
+        rows.append([inline_button(
+            f"{info['emoji']} {info['label']}{mark}",
+            callback_data=f"own_rbac_addrole:{target_id}:{role}")])
+    rows.append([inline_button("↩️ تراجع", callback_data=back)])
+    cur_line = ""
+    if cur:
+        cinfo = rbac.role_info(cur)
+        cur_line = f"• رتبته الحالية: {cinfo['emoji']} <b>{cinfo['label']}</b>\n"
+    text = (
+        "🎖️ <b>اختيار الرتبة</b>\n\n"
+        f"• المستخدم: <code>{target_id}</code>\n"
+        f"{cur_line}\n"
+        "اختر الرتبة — سيظهر لك ملخص صلاحياتها ونطاقها قبل التأكيد:"
+    )
+    return text, _kb(rows)
+
+
+def _rbac_confirm(target_id: int, role: str, back: str) -> tuple[str, InlineKeyboardMarkup]:
+    info = rbac.role_info(role)
+    existing = None
+    if target_id:
+        try:
+            existing = get_extra_admin(target_id)
+        except Exception:
+            existing = None
+    verb = f"تغيير رتبة <code>{target_id}</code>" if existing else f"منح <code>{target_id}</code>"
+    rows = [
+        [inline_button("✅ تأكيد التنفيذ", callback_data=f"own_rbac_exec:{target_id}:{role}"),
+         inline_button("↩️ تراجع", callback_data=back)],
+    ]
+    text = (
+        "⚠️ <b>تأكيد إدارة الرتب — قبل التنفيذ</b>\n\n"
+        f"• المستخدم: <code>{target_id}</code>\n"
+        f"• الرتبة: {info['emoji']} <b>{info['label']}</b>\n"
+        f"• نطاق الصلاحية: {info['desc']}\n"
+        f"• العملية: <b>{verb}</b>\n\n"
+        "⚡ رتبة «المالك» غير قابلة للمنح عبر البوت، والعملية تُسجل في سجل الأمان."
+    )
+    return text, _kb(rows)
+
+
+def _rbac_revoke_confirm(target_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    staff = get_extra_admin(target_id) if target_id else None
+    if not staff:
+        return (
+            "❌ المشرف غير موجود.",
+            InlineKeyboardMarkup([[inline_button("🔙 الرتب", callback_data="own_set_perms")]]),
+        )
+    info = rbac.role_info(staff.get("role") or "observer")
+    text = (
+        "⚠️ <b>تأكيد عزل مشرف — قبل التنفيذ</b>\n\n"
+        f"• المستخدم: <code>{target_id}</code>\n"
+        f"• الرتبة الحالية: {info['emoji']} <b>{info['label']}</b>\n\n"
+        "سيتم سحب كل صلاحياته الإدارية فورًا وتسجيل العملية في سجل الأمان."
+    )
+    rows = [
+        [inline_button("✅ نعم، اعزل المشرف", callback_data=f"own_rbac_deldo:{target_id}"),
+         inline_button("↩️ تراجع", callback_data="own_set_perms")],
+    ]
+    return text, _kb(rows)
+
+
+def _rbac_log_screen() -> tuple[str, InlineKeyboardMarkup]:
+    entries = get_admin_audit(60)
+    role_actions = {
+        "owner_grant_role", "owner_change_role", "owner_revoke_role",
+        "owner_grant_admin", "owner_revoke_admin",
+    }
+    ar_labels = {
+        "owner_grant_role": "منح رتبة",
+        "owner_change_role": "تغيير رتبة",
+        "owner_revoke_role": "عزل مشرف",
+        "owner_grant_admin": "منح أدمن (قديم)",
+        "owner_revoke_admin": "سحب أدمن (قديم)",
+    }
+    lines = []
+    for e in entries:
+        a = e.get("action")
+        if a not in role_actions:
+            continue
+        lines.append(
+            f"• <b>{escape(ar_labels.get(a, str(a)))}</b> — بواسطة <code>{e.get('admin_id')}</code>\n"
+            f"   ↳ {escape(str(e.get('detail') or '')[:100])} • {_format_timestamp(e.get('created_at'))}"
+        )
+    text = (
+        "📜 <b>سجل عمليات الرتب</b>\n\n"
+        + ("\n".join(lines[:20]) if lines else "لا توجد عمليات رتب مسجلة بعد.")
+    )
+    rows = [[inline_button("🔙 إدارة الرتب", callback_data="own_set_perms")]]
     return text, _kb(rows)
 
 
@@ -1952,6 +2096,67 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ <b>تأكيد سحب صلاحية أدمن</b>\n\n• المستخدم: <code>{target_id}</code>\n"
             "سيفقد الوصول للوحة الأدمن فورًا.",
             parse_mode="HTML", reply_markup=_kb(rows))
+
+    # ---- RBAC: role granting, changing, revoking & audit (owner-only panel) ----
+    elif data == "own_rbac_add":
+        OWNER_STATES[uid] = "rbac_add"
+        await _edit(query,
+            "➕ <b>منح مشرف جديد</b>\n\n"
+            "أرسل <code>ID</code> المستخدم (أرقام فقط).\n"
+            "ستختار الرتبة بعدها مباشرة — وكل رتبة لها نطاق صلاحيات محدد.",
+            parse_mode="HTML", reply_markup=_kb(_back("own_set_perms", "🔙 إلغاء")))
+    elif data.startswith("own_rbac_role:"):
+        target_id = _rbac_id(data, 1)
+        if not target_id:
+            return
+        text, kb = _rbac_role_picker(target_id, back="own_set_perms")
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("own_rbac_addrole:"):
+        target_id = _rbac_id(data, 1)
+        role = _rbac_role(data)
+        if not target_id:
+            return
+        text, kb = _rbac_confirm(target_id, role, back=f"own_rbac_role:{target_id}")
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("own_rbac_exec:"):
+        target_id = _rbac_id(data, 1)
+        role = _rbac_role(data)
+        if not target_id or role not in rbac.GRANTABLE_ROLES:
+            return
+        if target_id == OWNER_ID:
+            await query.answer("👑 المالك الأساسي ثابت من البيئة — لا يمكن منحه رتبة.", show_alert=True)
+            return
+        old = None
+        try:
+            existing = get_extra_admin(target_id)
+            old = existing.get("role") if existing else None
+        except Exception:
+            pass
+        add_extra_admin(target_id, role=role, granted_by=uid)
+        action = "owner_grant_role" if not old else "owner_change_role"
+        log_admin_action(uid, action, target_id,
+                         detail=f"role={role} old={old or 'none'} by={uid}")
+        text, kb = _perms_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("own_rbac_del:"):
+        target_id = _rbac_id(data, 1)
+        if not target_id:
+            return
+        text, kb = _rbac_revoke_confirm(target_id)
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("own_rbac_deldo:"):
+        target_id = _rbac_id(data, 1)
+        if not target_id:
+            return
+        existing = get_extra_admin(target_id) or {}
+        old_role = existing.get("role") or "observer"
+        remove_extra_admin(target_id)
+        log_admin_action(uid, "owner_revoke_role", target_id, detail=f"old={old_role} by={uid}")
+        text, kb = _perms_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_rbac_log":
+        text, kb = _rbac_log_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
     elif data == "own_audit":
         await _audit_screen(query)
     elif data == "own_set_target":
@@ -2169,6 +2374,20 @@ async def owner_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "• لوحة المالك: <b>لا تُمنح أبدًا</b>\n\n"
             "سيُسجل التعديل في سجل الأمان.",
             parse_mode="HTML", reply_markup=_kb(rows))
+        return True
+
+    if state == "rbac_add":
+        if not text.lstrip("-").isdigit():
+            await update.message.reply_text("⚠️ أرسل ID رقميًا فقط.")
+            return True
+        target_id = int(text)
+        if target_id == OWNER_ID:
+            await update.message.reply_text(
+                "👑 المالك الأساسي ثابت من البيئة ولا يحتاج رتبة — اختر مستخدمًا آخر.",
+                reply_markup=_kb(_back("own_set_perms", "🔙 الرتب")))
+            return True
+        t2, kb2 = _rbac_role_picker(target_id, back="own_set_perms")
+        await update.message.reply_text(t2, parse_mode="HTML", reply_markup=kb2)
         return True
 
     if state == "target":

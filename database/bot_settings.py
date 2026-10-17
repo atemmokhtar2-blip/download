@@ -38,20 +38,36 @@ def delete_setting(key: str) -> None:
         c.execute("DELETE FROM bot_settings WHERE key = ?", (key,))
 
 
-# ---- dynamic admins (granted by the owner, revocable) -------------------------
+# ---- dynamic admin staff (granted by the owner, revocable, role-based) ---------
 
 def list_extra_admins() -> list[dict]:
     with db_cursor() as c:
-        c.execute("SELECT user_id, added_at FROM extra_admins ORDER BY added_at DESC")
+        c.execute("""
+            SELECT user_id, role, granted_by, added_at, updated_at
+            FROM extra_admins ORDER BY added_at DESC
+        """)
         return [dict(row) for row in c.fetchall()]
 
 
-def add_extra_admin(user_id: int) -> None:
+def get_extra_admin(user_id: int) -> dict | None:
     with db_cursor() as c:
-        c.execute(
-            "INSERT OR IGNORE INTO extra_admins (user_id) VALUES (?)",
-            (int(user_id),),
-        )
+        c.execute("SELECT * FROM extra_admins WHERE user_id = ?", (int(user_id),))
+        row = c.fetchone()
+        return dict(row) if row else None
+
+
+def add_extra_admin(user_id: int, role: str = "general_supervisor",
+                    granted_by: int | None = None) -> None:
+    """Grant or update a staff role (upsert). Only the owner panel writes here."""
+    with db_cursor() as c:
+        c.execute("""
+            INSERT INTO extra_admins (user_id, role, granted_by)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                role = excluded.role,
+                granted_by = COALESCE(excluded.granted_by, extra_admins.granted_by),
+                updated_at = datetime('now')
+        """, (int(user_id), role, granted_by))
 
 
 def remove_extra_admin(user_id: int) -> None:

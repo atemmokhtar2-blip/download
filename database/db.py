@@ -314,10 +314,24 @@ def ensure_owner_schema():
             c.execute("ALTER TABLE users ADD COLUMN banned_at TEXT")
         c.execute("""
             CREATE TABLE IF NOT EXISTS extra_admins (
-                user_id   INTEGER PRIMARY KEY,
-                added_at  TEXT DEFAULT (datetime('now'))
+                user_id    INTEGER PRIMARY KEY,
+                role       TEXT DEFAULT 'general_supervisor',
+                granted_by INTEGER,
+                added_at   TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                note       TEXT DEFAULT ''
             )
         """)
+        # RBAC migration: extend an OLD extra_admins table (pre-role) safely.
+        a_cols = table_columns("extra_admins")
+        if "role" not in a_cols:
+            c.execute("ALTER TABLE extra_admins ADD COLUMN role TEXT DEFAULT 'general_supervisor'")
+        if "granted_by" not in a_cols:
+            c.execute("ALTER TABLE extra_admins ADD COLUMN granted_by INTEGER")
+        if "updated_at" not in a_cols:
+            c.execute("ALTER TABLE extra_admins ADD COLUMN updated_at TEXT")
+        if "note" not in a_cols:
+            c.execute("ALTER TABLE extra_admins ADD COLUMN note TEXT DEFAULT ''")
 
 
 def ensure_cache_schema():

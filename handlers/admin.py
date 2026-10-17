@@ -13,6 +13,7 @@ from utils.button_text import inline_button
 from telegram.ext import ContextTypes
 
 from middlewares.auth import is_admin, is_owner
+from services.rbac import has_perm, role_for_user, role_info
 from locales import t
 from database.users import (
     get_user, get_total_users, get_new_users_today, get_active_today,
@@ -292,9 +293,29 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_user = get_user(user.id)
     lang = db_user.get("language", "en") if db_user else "en"
     data = query.data
-    owner_only_callbacks = {"admin_owner_overview", "admin_referral_network", "admin_clone_instances"}
-    if data in owner_only_callbacks and not is_owner(user.id):
-        await query.answer("🔒 القسم ده متاح لصاحب البوت الأساسي فقط.", show_alert=True)
+    # RBAC gates: every sensitive action re-verifies the role's permission,
+    # not just is_admin(). A hand-crafted callback is refused the same way.
+    _perm_required = None
+    if data.startswith(("admin_ban", "admin_unban_")):
+        _perm_required = "admin.users"
+    elif data.startswith("admin_support"):
+        _perm_required = "admin.support"
+    elif data in ("admin_maintenance", "admin_maintenance_on", "admin_maintenance_off"):
+        _perm_required = "admin.maintenance"
+    elif data in ("admin_update_ytdlp",):
+        _perm_required = "admin.engine"
+    elif data in ("admin_referral_network", "admin_clone_instances"):
+        _perm_required = "admin.network"
+
+    if _perm_required and not has_perm(user.id, _perm_required):
+        await query.answer("🔒 لا تملك صلاحية كافية لهذا الإجراء.", show_alert=True)
+        return
+    if data == "admin_owner_overview" and not is_owner(user.id):
+        await query.answer("🔒 ملخص المالك متاح للمالك الأساسي فقط.", show_alert=True)
+        return
+    if data in ("admin_broadcast", "admin_send_broadcast", "admin_announce_update") \
+            and not is_owner(user.id):
+        await query.answer("⛔ الإذاعة الجماعية متاحة للمالك فقط.", show_alert=True)
         return
     if _invalid_admin_callback(data):
         await query.answer(t(lang, "session_expired"), show_alert=True)
@@ -779,37 +800,47 @@ async def _show_clone_instances(query) -> None:
 
 
 def _build_admin_panel(lang: str, user_id: int | None = None):
-    """Build a button-first admin menu; detailed stats live in their own screens."""
-    keyboard = [
-        *([[
-            inline_button("👑 ملخص المالك", callback_data="admin_owner_overview"),
+    """Build a permission-aware admin menu for the staff member's role."""
+    if user_id is None:
+        return "👑 <b>لوحة الإدارة</b>\n\nاختار القسم من الأزرار:", InlineKeyboardMarkup([])
+    role = role_for_user(user_id) or "observer"
+    info = role_info(role)
+    is_owner_user = is_owner(user_id)
+
+    def allowed(perm: str) -> bool:
+        return is_owner_user or has_perm(user_id, perm)
+
+    rows = []
+    if is_owner_user:
+        rows.append([inline_button("👑 ملخص المالك", callback_data="admin_owner_overview")])
+    if is_owner_user or has_perm(user_id, "admin.network"):
+        rows.append([
             inline_button("🤝 شبكة الإحالات", callback_data="admin_referral_network"),
-        ], [
             inline_button("🤖 نسخ المستخدمين", callback_data="admin_clone_instances"),
-        ]] if user_id is not None and is_owner(user_id) else []),
-        [
-            inline_button("👥 المستخدمون", callback_data="admin_users"),
-            inline_button("🔍 بحث عن مستخدم", callback_data="admin_search"),
-        ],
-        [
-            inline_button("📢 إذاعة", callback_data="admin_broadcast"),
-            inline_button("🚧 وضع الصيانة", callback_data="admin_maintenance"),
-        ],
-        [
+        ])
+    rows.append([
+        inline_button("👥 المستخدمون", callback_data="admin_users"),
+        inline_button("🔍 بحث عن مستخدم", callback_data="admin_search"),
+    ])
+    if is_owner_user:
+        rows.append([inline_button("📢 إذاعة", callback_data="admin_broadcast")])
+    if allowed("admin.maintenance"):
+        rows.append([inline_button("🚧 وضع الصيانة", callback_data="admin_maintenance")])
+    if allowed("admin.engine"):
+        rows.append([
             inline_button("🧠 حالة المحرك", callback_data="admin_engine_status"),
-            inline_button("🩺 صحة النظام", callback_data="admin_health"),
-        ],
-        [
             inline_button("🔄 تحديث yt-dlp", callback_data="admin_update_ytdlp"),
-            inline_button("📜 سجل الأمان", callback_data="admin_audit"),
-        ],
-        [
-            inline_button("🔐 فحص الأمان", callback_data="admin_security"),
-            inline_button("🛟 تذاكر الدعم", callback_data="admin_support"),
-        ],
-    ]
-    text = "👑 <b>لوحة الإدارة</b>\n\nاختار القسم من الأزرار:"
-    return text, InlineKeyboardMarkup(keyboard)
+        ])
+    rows.append([
+        inline_button("🩺 صحة النظام", callback_data="admin_health"),
+        inline_button("📜 سجل الأمان", callback_data="admin_audit"),
+    ])
+    rows.append([inline_button("🔐 فحص الأمان", callback_data="admin_security")])
+    if allowed("admin.support"):
+        rows.append([inline_button("🛟 تذاكر الدعم", callback_data="admin_support")])
+
+    text = f"{info['emoji']} <b>لوحة الإدارة — {info['label']}</b>\n\nاختار القسم من الأزرار:"
+    return text, InlineKeyboardMarkup(rows)
 
 async def _show_admin_panel(query, lang: str):
     text, keyboard = _build_admin_panel(lang, query.from_user.id)
@@ -1006,11 +1037,13 @@ def _render_user_detail(target_id: int, admin_id: int | None = None):
         f"• صور/أخرى: <b>{other}</b>"
     )
 
+    can_ban = admin_id is not None and (is_owner(admin_id) or has_perm(admin_id, "admin.users"))
     keyboard = []
-    if is_banned:
-        keyboard.append([inline_button("✅ فك الحظر", callback_data=f"admin_unban_{target_id}")])
-    else:
-        keyboard.append([inline_button("🚫 حظر المستخدم", callback_data=f"admin_ban_confirm_{target_id}")])
+    if can_ban:
+        if is_banned:
+            keyboard.append([inline_button("✅ فك الحظر", callback_data=f"admin_unban_{target_id}")])
+        else:
+            keyboard.append([inline_button("🚫 حظر المستخدم", callback_data=f"admin_ban_confirm_{target_id}")])
     keyboard.append([inline_button("🔙 رجوع للمستخدمين", callback_data=f"admin_users_page_{page}")])
 
     return text, InlineKeyboardMarkup(keyboard)
@@ -1102,6 +1135,17 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if state not in _ADMIN_TEXT_STATES:
         logger.warning("Dropped unknown admin text state for user=%s: %s", user_id, state)
         return False
+    # RBAC: the text path is gated too — a stale state in the dict is never
+    # enough to perform an action the role is not allowed to do.
+    if state in ("ban",) and not has_perm(user_id, "admin.users"):
+        await update.message.reply_text("🔒 لا تملك صلاحية إدارة المستخدمين.")
+        return True
+    if state == "support_reply" and not has_perm(user_id, "admin.support"):
+        await update.message.reply_text("🔒 لا تملك صلاحية الدعم الفني.")
+        return True
+    if state == "broadcast" and not is_owner(user_id):
+        await update.message.reply_text("🔒 الإذاعة متاحة للمالك فقط.")
+        return True
     text = (update.message.text or "").strip()
     if not text:
         await update.message.reply_text("⚠️ أرسل نصًا صالحًا (ID أو @username أو اسم).")
