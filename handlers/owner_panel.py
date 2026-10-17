@@ -1472,6 +1472,7 @@ def _sub_screen() -> tuple[str, InlineKeyboardMarkup]:
     rows = [
         [inline_button("➕ إضافة قناة", callback_data="own_sub_add"),
          inline_button("🔘 إيقاف" if enabled else "🔘 تفعيل", callback_data="own_sub_toggle")],
+        [inline_button("🔎 فحص فعلي للقنوات", callback_data="own_sub_test")],
     ]
     for ch in chans[:10]:
         rows.append([inline_button(
@@ -1481,7 +1482,43 @@ def _sub_screen() -> tuple[str, InlineKeyboardMarkup]:
     return text, _kb(rows)
 
 
-def _perms_screen() -> tuple[str, InlineKeyboardMarkup]:
+async def _sub_test(context, query):
+    """🔎 Live diagnostic: show what Telegram actually returns when the bot
+    reads membership for each configured channel — using the OWNER as the
+    probe. This is the ground-truth check for "why is subscription not
+    blocking users?"."""
+    enabled = sub_db.subscription_enabled()
+    chans = sub_db.list_channels(0, enabled_only=True)
+    lines = [
+        "🔎 <b>فحص فعلي للاشتراك الإجباري</b>\n",
+        f"• الحالة: {'🟢 مفعّل' if enabled else '⚫ موقوف'}\n",
+        "• فحص عضويتك (للمالك) في كل قناة:\n" if chans else "• لا توجد قنوات نشطة بعد.\n",
+    ]
+    joined = {"creator", "administrator", "member", "restricted"}
+    all_ok = True
+    for ch in chans:
+        ref = str(ch.get("channel_ref") or "")
+        arg = int(ref) if ref.lstrip("-").isdigit() else ref
+        try:
+            member = await context.bot.get_chat_member(chat_id=arg, user_id=int(OWNER_ID))
+            status = getattr(member, "status", "?")
+            icon = "✅" if status in joined else "❌"
+            if icon == "❌":
+                all_ok = False
+            lines.append(f"{icon} <code>{escape(ref)}</code> — حالتك: <code>{escape(status)}</code>")
+        except Exception as exc:
+            all_ok = False
+            lines.append(f"🚫 <code>{escape(ref)}</code> — خطأ: <code>{escape(str(exc)[:110])}</code>")
+
+    lines.append(
+        "\n💡 <b>قراءة النتيجة:</b>\n"
+        "• <code>administrator</code>/<code>member</code> = البوت قادر على فحص العضوية ✓\n"
+        "• <code>left</code> = أنت غير مشترك في هذه القناة (طبيعي كاختبار)\n"
+        "• <code>chat not found</code> أو <code>member list inaccessible</code> = "
+        "البوت <b>ليس مشرفًا</b> في القناة أو المعرّف خاطئ."
+    )
+    await _edit(query, "\n".join(lines), parse_mode="HTML",
+                reply_markup=_kb(_back("own_sub", "🔙 الاشتراك الإجباري")))
     staff = list_extra_admins()
     text = (
         "🛡️ <b>إدارة المشرفين والرتب</b>\n\n"
@@ -2249,8 +2286,16 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         now_on = not sub_db.subscription_enabled()
         sub_db.set_subscription_enabled(now_on)
         log_admin_action(uid, "owner_sub_toggle", detail=f"enabled={now_on}")
-        text, kb = _sub_screen()
-        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+        await _edit(query,
+            "📡 <b>الاشتراك الإجباري</b>\n\n"
+            f"✅ تم {'<b>تفعيل</b>' if now_on else '<b>إيقاف</b>'} الشرط على البوت الرئيسي.\n"
+            f"• الحالة الآن: {'🟢 مفعّل' if now_on else '⚫ موقوف'}",
+            parse_mode="HTML", reply_markup=_kb([
+                [inline_button("📡 عرض القنوات", callback_data="own_sub"),
+                 inline_button("🔎 فحص فعلي", callback_data="own_sub_test")],
+            ]))
+    elif data == "own_sub_test":
+        await _sub_test(context, query)
     elif data.startswith("own_sub_del_"):
         cid = _suffix_int(data)
         ch = sub_db.get_channel(cid) if cid else None
@@ -2509,12 +2554,24 @@ async def owner_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return True
         title, invite = "", ""
         try:
-            chat = await context.bot.get_chat(ref)
+            # Numeric chat ids MUST be sent as int, never as "-100..." string:
+            # Telegram treats a numeric-looking string as a @username and fails.
+            chat_id_arg = int(ref) if ref.lstrip("-").isdigit() else ref
+            chat = await context.bot.get_chat(chat_id_arg)
             title = (getattr(chat, "title", "") or "").strip()
             uname = getattr(chat, "username", None)
             invite = (getattr(chat, "invite_link", "") or "").strip()
             if not invite and uname:
                 invite = f"https://t.me/{uname}"
+            if not invite:
+                # Private channel without a public link — generate one so users
+                # actually have a join button to tap.
+                try:
+                    link = await context.bot.create_chat_invite_link(
+                        chat_id=chat_id_arg, name="subscription", creates_join_request=False)
+                    invite = (getattr(link, "invite_link", "") or "").strip()
+                except Exception:
+                    invite = ""
         except Exception as exc:
             await update.message.reply_text(
                 "⚠️ تعذّر الوصول للقناة — تأكد أن البوت عضو/مشرف فيها والرابط صحيح.\n"
@@ -2523,8 +2580,18 @@ async def owner_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return True
         sub_db.add_channel(0, ref, title, invite, added_by=uid)
         log_admin_action(uid, "owner_sub_add", detail=f"channel={ref} title={title[:40]}")
-        text2, kb2 = _sub_screen()
-        await update.message.reply_text(text2, parse_mode="HTML", reply_markup=kb2)
+        await update.message.reply_text(
+            "✅ <b>تمت إضافة القناة</b>\n\n"
+            f"• القناة: <code>{escape(ref)}</code>\n"
+            f"• العنوان: {escape(title[:60]) or '—'}\n"
+            + (f"• رابط الدعوة: {escape(invite[:140])}\n" if invite
+               else "⚠️ لم نستطع توليد رابط دعوة لهذه القناة الخاصة — أضف المستخدمين إليها يدويًا.\n")
+            + "\nافتح «عرض القنوات» وتأكد أن المفتاح <b>مفعّل</b>، ثم استخدم «🔎 فحص فعلي» للتحقق.",
+            parse_mode="HTML",
+            reply_markup=_kb([
+                [inline_button("📡 عرض القنوات", callback_data="own_sub"),
+                 inline_button("🔎 فحص فعلي", callback_data="own_sub_test")],
+            ]))
         return True
 
     if state == "target":

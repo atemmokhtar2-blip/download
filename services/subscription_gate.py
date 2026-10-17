@@ -27,13 +27,34 @@ _JOINED_STATUSES = {"creator", "administrator", "member"}
 _OWNER_ALERT_COOLDOWN: dict[str, float] = {}
 
 
+def resolve_chat_id(channel_ref: str):
+    """Return an int for numeric refs, the @username string otherwise.
+
+    Telegram REJECTS negative numeric chat ids sent as JSON strings (it treats
+    the string as a @username and fails with "chat not found"), so numeric
+    ``channel_ref`` values MUST be converted to int before any get_chat /
+    get_chat_member call. This was silently breaking membership checks for
+    private channels added by numeric ID.
+    """
+    ref = str(channel_ref or "").strip()
+    if ref.startswith("@"):
+        return ref
+    if ref.lstrip("-").isdigit():
+        try:
+            return int(ref)
+        except ValueError:
+            pass
+    return ref
+
+
 def _join_url(ch: dict) -> str:
-    if ch.get("invite_link"):
-        return ch["invite_link"]
+    link = (ch.get("invite_link") or "").strip()
+    if link.startswith(("http://", "https://")):
+        return link
     ref = (ch.get("channel_ref") or "").strip()
     if ref.startswith("@"):
         return f"https://t.me/{ref[1:].strip()}"
-    return ref
+    return ""
 
 
 async def _alert_owner(bot, channel_ref: str, error: str) -> None:
@@ -72,7 +93,7 @@ async def _check_member(bot, channel_ref: str, user_id: int) -> bool:
     last_exc: Exception | None = None
     for attempt in range(_RETRIES + 1):
         try:
-            member = await bot.get_chat_member(chat_id=channel_ref, user_id=user_id)
+            member = await bot.get_chat_member(chat_id=resolve_chat_id(channel_ref), user_id=user_id)
             status = getattr(member, "status", "")
             return status in _JOINED_STATUSES or status == "restricted"
         except TelegramError as exc:
@@ -100,11 +121,17 @@ async def _verify(bot, user_id: int, channels: list[dict]):
 
 
 async def _send_prompt(message, channels, verification_error: bool) -> None:
-    rows = []
+    rows: list = []
+    listed: list[str] = []
     for ch in channels:
         label = (ch.get("title") or ch.get("channel_ref") or "قناة").strip()
+        listed.append(f"• {escape(label)}")
         url = _join_url(ch)
-        rows.append([inline_button(f"➕ {label}", url=url)])
+        if url:
+            try:
+                rows.append([inline_button(f"➕ {label}", url=url)])
+            except Exception:
+                pass
     rows.append([inline_button("✅ انضميت — تحقق الآن", callback_data="sub_check")])
 
     text = "🔒 <b>هذه الميزة تتطلب الاشتراك</b>\n\n"
@@ -113,7 +140,10 @@ async def _send_prompt(message, channels, verification_error: bool) -> None:
             "⚠️ تعذّر التحقق من اشتراكك مؤقتًا. أعد المحاولة بعد قليل.\n"
             "لن يتم تجاوز الشرط حتى ينجح التحقق.\n\n"
         )
-    text += "اشترك في القنوات التالية، ثم اضغط <b>«انضميت — تحقق الآن»</b>:"
+    text += (
+        "اشترك في القنوات التالية، ثم اضغط <b>«انضميت — تحقق الآن»</b>:\n"
+        + "\n".join(listed)
+    )
 
     try:
         await message.reply_text(
