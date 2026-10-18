@@ -380,7 +380,7 @@ def test_instagram_audio_falls_back_to_video_extract_after_generic_failure(monke
 
     monkeypatch.setattr(downloader, "_generic_download_audio", fake_generic_audio)
     monkeypatch.setattr(downloader, "download_video", fake_download_video)
-    monkeypatch.setattr(downloader, "extract_audio_mp3", lambda path, bitrate: "/tmp/audio.mp3")
+    monkeypatch.setattr(downloader, "extract_audio_mp3", lambda path, bitrate, *args, **kwargs: "/tmp/audio.mp3")
 
     path = asyncio.run(
         InstagramEngine().download_audio(
