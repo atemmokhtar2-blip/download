@@ -293,6 +293,13 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_user = get_user(user.id)
     lang = db_user.get("language", "en") if db_user else "en"
     data = query.data
+    owner_only_callbacks = {
+        "admin_owner_overview", "admin_broadcast",
+        "admin_send_broadcast", "admin_announce_update",
+    }
+    if data in owner_only_callbacks and not is_owner(user.id):
+        await query.answer("⛔ هذا الإجراء متاح للمالك الأساسي فقط.", show_alert=True)
+        return
     # RBAC gates: every sensitive action re-verifies the role's permission,
     # not just is_admin(). A hand-crafted callback is refused the same way.
     _perm_required = None
