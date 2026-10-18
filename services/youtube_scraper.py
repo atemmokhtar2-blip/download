@@ -94,7 +94,23 @@ def _base_opts(extra: dict | None = None) -> dict:
     if yt_visitor_data:
         opts.setdefault("extractor_args", {}).setdefault("youtube", {})["visitor_data"] = [yt_visitor_data]
     if extra:
-        opts.update(extra)
+        # Deep-merge nested options: a profile that carries ``extractor_args``
+        # (e.g. ``player_client``) must NEVER wipe the PO token / visitor_data
+        # configured above — plain ``update`` replaces the whole nested dict.
+        _x = dict(extra)
+        ea_extra = _x.pop("extractor_args", None)
+        opts.update(_x)
+        if isinstance(ea_extra, dict):
+            base_ea = opts.setdefault("extractor_args", {})
+            for ie_name, ie_opts in ea_extra.items():
+                if not isinstance(ie_opts, dict):
+                    base_ea[ie_name] = ie_opts
+                    continue
+                existing = base_ea.setdefault(ie_name, {})
+                if isinstance(existing, dict):
+                    existing.update(ie_opts)
+                else:
+                    base_ea[ie_name] = ie_opts
     return opts
 
 
@@ -130,18 +146,26 @@ def normalize_youtube_url(url: str) -> str:
 
 
 def _extract_sync(url: str) -> dict:
+    """Analysis profile matrix, strongest YouTube clients first.
+
+    ``web_embedded`` / ``tv`` / ``tv_embedded`` are the bot-check immune
+    surfaces in modern yt-dlp; the web/android family sits at the BACK because
+    it most often triggers "Sign in to confirm you're not a bot".
+    """
     profiles: list[tuple[str, dict[str, Any]]] = [
-        ("android_ios", {"extractor_args": {"youtube": {"player_client": ["android", "ios"]}}}),
-        ("web_mweb", {"extractor_args": {"youtube": {"player_client": ["web", "mweb"]}}}),
-        ("tv_embedded", {"extractor_args": {"youtube": {"player_client": ["tv_embedded", "web"]}}}),
-        ("web_creator", {"extractor_args": {"youtube": {"player_client": ["web_creator", "web"]}}}),
-        ("ios_android", {"extractor_args": {"youtube": {"player_client": ["ios", "android"]}}}),
-        ("web_safari", {"extractor_args": {"youtube": {"player_client": ["web_safari", "web"]}}}),
+        ("web_embedded", {"extractor_args": {"youtube": {"player_client": ["web_embedded"]}}}),
+        ("web_embedded_tv", {"extractor_args": {"youtube": {"player_client": ["web_embedded", "tv"]}}}),
+        ("tv_embedded_web", {"extractor_args": {"youtube": {"player_client": ["tv_embedded", "web_embedded"]}}}),
         ("tv", {"extractor_args": {"youtube": {"player_client": ["tv", "tv_embedded"]}}}),
-        ("web_music", {"extractor_args": {"youtube": {"player_client": ["web_music", "web"]}}}),
+        ("ios", {"extractor_args": {"youtube": {"player_client": ["ios"]}}}),
+        ("ios_android", {"extractor_args": {"youtube": {"player_client": ["ios", "android"]}}}),
+        ("android_ios", {"extractor_args": {"youtube": {"player_client": ["android", "ios"]}}}),
+        ("web_creator", {"extractor_args": {"youtube": {"player_client": ["web_creator", "web"]}}}),
+        ("web_safari", {"extractor_args": {"youtube": {"player_client": ["web_safari", "web"]}}}),
+        ("music", {"extractor_args": {"youtube": {"player_client": ["web_music", "ios_music", "android_music"]}}}),
         ("mediaconnect", {"extractor_args": {"youtube": {"player_client": ["mediaconnect", "web"]}}}),
-        ("android_music", {"extractor_args": {"youtube": {"player_client": ["android_music", "android"]}}}),
-        ("web_embedded", {"extractor_args": {"youtube": {"player_client": ["web_embedded", "web"]}}}),
+        ("web_mweb", {"extractor_args": {"youtube": {"player_client": ["web", "mweb"]}}}),
+        ("full_matrix", {"extractor_args": {"youtube": {"player_client": ["web_embedded", "tv", "tv_embedded", "ios", "android"]}}}),
     ]
     last_err: Exception | None = None
     for profile_name, extra in profiles:

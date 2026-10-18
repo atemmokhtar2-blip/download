@@ -203,17 +203,26 @@ YOUTUBE_PLAYER_CLIENTS = {
 
 
 def _safe_youtube_clients() -> list[str]:
-    """Filter env config to valid yt-dlp YouTube player_client values only."""
+    """Order yt-dlp YouTube player clients from most to least reliable.
+
+    ``web_embedded``, ``tv`` and ``tv_embedded`` are the modern bot-check
+    immune surfaces; plain ``android`` / ``web`` / ``mweb`` are kept as later
+    fallbacks because they trigger "Sign in to confirm you're not a bot" or
+    throttling far more often. The env knob (``YTDLP_CLIENT``) acts as one
+    extra candidate instead of being allowed to force a weak client first.
+    """
     candidates = [
-        YTDLP_CLIENT, "android", "ios", "web", "mweb", "tv_embedded",
-        "web_creator", "web_safari", "web_music", "mediaconnect",
+        "web_embedded", "tv", "tv_embedded", "ios",
+        YTDLP_CLIENT,
+        "web_creator", "web_safari", "android",
+        "web_music", "mediaconnect", "mweb", "web",
     ]
     out: list[str] = []
     for raw in candidates:
         item = str(raw or "").strip()
         if item in YOUTUBE_PLAYER_CLIENTS and item not in out:
             out.append(item)
-    return out or ["android", "ios", "web"]
+    return out or ["web_embedded", "tv", "ios"]
 
 
 def _safe_ytdlp_impersonate():
@@ -253,15 +262,17 @@ def _youtube_client_profiles() -> list[tuple[str, list[str]]]:
     preferred = _safe_youtube_clients()
     profiles: list[tuple[str, list[str]]] = [
         ("env-preferred", preferred[:4]),
+        ("embedded-tv", ["web_embedded", "tv"]),
+        ("tv-embedded", ["tv_embedded", "web_embedded"]),
+        ("tv", ["tv", "web_embedded"]),
+        ("ios-android", ["ios", "android"]),
+        ("music", ["web_music", "ios_music", "android_music"]),
+        ("creator", ["web_creator", "web"]),
+        ("safari", ["web_safari", "web"]),
+        ("mediaconnect", ["mediaconnect", "web"]),
         ("android-ios", ["android", "ios"]),
         ("web-mweb", ["web", "mweb"]),
-        ("tv-embedded", ["tv_embedded", "web"]),
-        ("creator-web", ["web_creator", "web"]),
-        ("safari-web", ["web_safari", "web"]),
-        ("music", ["web_music", "android_music", "ios_music", "web"]),
-        ("embedded", ["web_embedded", "tv_embedded", "web"]),
-        ("mediaconnect", ["mediaconnect", "web"]),
-        ("full-matrix", ["android", "ios", "web", "mweb", "tv_embedded", "web_creator", "web_music"]),
+        ("full-matrix", ["web_embedded", "tv", "tv_embedded", "ios", "android", "web_creator", "web_music"]),
     ]
     seen: set[tuple[str, ...]] = set()
     out: list[tuple[str, list[str]]] = []
