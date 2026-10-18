@@ -146,26 +146,29 @@ def normalize_youtube_url(url: str) -> str:
 
 
 def _extract_sync(url: str) -> dict:
-    """Analysis profile matrix, strongest YouTube clients first.
+    """Analysis profile matrix — full-quality clients first, bot-immune last.
 
-    ``web_embedded`` / ``tv`` / ``tv_embedded`` are the bot-check immune
-    surfaces in modern yt-dlp; the web/android family sits at the BACK because
-    it most often triggers "Sign in to confirm you're not a bot".
+    ``ios`` / ``android`` / ``tv`` expose the complete format ladder (real
+    1080p+ video + m4a/opus audio) so the quality buttons and Smart Download
+    are strong by default. ``web_embedded`` / ``tv_embedded`` stay at the BACK
+    as fallbacks for age/bot-gated URLs — they only expose weak 360p-ish
+    formats, so leading with them produced a weak engine and weak quality lists.
     """
     profiles: list[tuple[str, dict[str, Any]]] = [
-        ("web_embedded", {"extractor_args": {"youtube": {"player_client": ["web_embedded"]}}}),
-        ("web_embedded_tv", {"extractor_args": {"youtube": {"player_client": ["web_embedded", "tv"]}}}),
-        ("tv_embedded_web", {"extractor_args": {"youtube": {"player_client": ["tv_embedded", "web_embedded"]}}}),
-        ("tv", {"extractor_args": {"youtube": {"player_client": ["tv", "tv_embedded"]}}}),
         ("ios", {"extractor_args": {"youtube": {"player_client": ["ios"]}}}),
+        ("android", {"extractor_args": {"youtube": {"player_client": ["android"]}}}),
         ("ios_android", {"extractor_args": {"youtube": {"player_client": ["ios", "android"]}}}),
+        ("tv", {"extractor_args": {"youtube": {"player_client": ["tv", "tv_embedded"]}}}),
+        ("tv_embedded_web", {"extractor_args": {"youtube": {"player_client": ["tv_embedded", "web_embedded"]}}}),
+        ("web_embedded_tv", {"extractor_args": {"youtube": {"player_client": ["web_embedded", "tv"]}}}),
+        ("web_embedded", {"extractor_args": {"youtube": {"player_client": ["web_embedded"]}}}),
         ("android_ios", {"extractor_args": {"youtube": {"player_client": ["android", "ios"]}}}),
+        ("music", {"extractor_args": {"youtube": {"player_client": ["web_music", "ios_music", "android_music"]}}}),
         ("web_creator", {"extractor_args": {"youtube": {"player_client": ["web_creator", "web"]}}}),
         ("web_safari", {"extractor_args": {"youtube": {"player_client": ["web_safari", "web"]}}}),
-        ("music", {"extractor_args": {"youtube": {"player_client": ["web_music", "ios_music", "android_music"]}}}),
         ("mediaconnect", {"extractor_args": {"youtube": {"player_client": ["mediaconnect", "web"]}}}),
         ("web_mweb", {"extractor_args": {"youtube": {"player_client": ["web", "mweb"]}}}),
-        ("full_matrix", {"extractor_args": {"youtube": {"player_client": ["web_embedded", "tv", "tv_embedded", "ios", "android"]}}}),
+        ("full_matrix", {"extractor_args": {"youtube": {"player_client": ["ios", "android", "tv", "web_embedded", "web"]}}}),
     ]
     last_err: Exception | None = None
     for profile_name, extra in profiles:

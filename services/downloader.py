@@ -205,16 +205,16 @@ YOUTUBE_PLAYER_CLIENTS = {
 def _safe_youtube_clients() -> list[str]:
     """Order yt-dlp YouTube player clients from most to least reliable.
 
-    ``web_embedded``, ``tv`` and ``tv_embedded`` are the modern bot-check
-    immune surfaces; plain ``android`` / ``web`` / ``mweb`` are kept as later
-    fallbacks because they trigger "Sign in to confirm you're not a bot" or
-    throttling far more often. The env knob (``YTDLP_CLIENT``) acts as one
-    extra candidate instead of being allowed to force a weak client first.
+    ``ios`` / ``android`` / ``tv`` come FIRST: they expose the full DASH/HLS
+    format ladder (real 1080p+ video and m4a/opus audio) and are the strongest
+    surfaces for ordinary media URLs. ``web_embedded`` / ``tv_embedded`` sit
+    later as bot-check-immune fallbacks — they only serve weak 360p-ish
+    formats, so leading with them was collapsing the engine to weak quality.
     """
     candidates = [
-        "web_embedded", "tv", "tv_embedded", "ios",
+        "ios", "android", "tv", "tv_embedded",
         YTDLP_CLIENT,
-        "web_creator", "web_safari", "android",
+        "web_embedded", "web_creator", "web_safari",
         "web_music", "mediaconnect", "mweb", "web",
     ]
     out: list[str] = []
@@ -222,7 +222,7 @@ def _safe_youtube_clients() -> list[str]:
         item = str(raw or "").strip()
         if item in YOUTUBE_PLAYER_CLIENTS and item not in out:
             out.append(item)
-    return out or ["web_embedded", "tv", "ios"]
+    return out or ["ios", "android", "tv"]
 
 
 def _safe_ytdlp_impersonate():
@@ -251,28 +251,22 @@ def _safe_ytdlp_impersonate():
 
 
 def _youtube_client_profiles() -> list[tuple[str, list[str]]]:
-    """World-class YouTube fallback matrix: mobile, web, TV, music, embedded.
+    """Bounded YouTube download profile matrix — quality + speed.
 
-    yt-dlp frequently succeeds or fails based on the player surface, not the URL.
-    Trying profile groups gives the extractor more player JSON options per pass,
-    while still keeping attempts bounded. The music/embedded surfaces are
-    essential for audio downloads and videos embedded off-site, where plain web
-    or android clients are often throttled or blocked.
+    The DOWNLOAD stage re-extracts with ``download=True``, so it only needs a
+    short client ladder, not the full 14-surface matrix the ANALYSIS stage
+    uses. Leading with ``ios``/``android``/``tv`` (full quality) and keeping
+    ``web_embedded`` as the final bot-check-immune fallback stops the old
+    behaviour of burning dozens of attempts on weak web/android clients.
     """
     preferred = _safe_youtube_clients()
     profiles: list[tuple[str, list[str]]] = [
-        ("env-preferred", preferred[:4]),
-        ("embedded-tv", ["web_embedded", "tv"]),
-        ("tv-embedded", ["tv_embedded", "web_embedded"]),
-        ("tv", ["tv", "web_embedded"]),
-        ("ios-android", ["ios", "android"]),
-        ("music", ["web_music", "ios_music", "android_music"]),
-        ("creator", ["web_creator", "web"]),
-        ("safari", ["web_safari", "web"]),
-        ("mediaconnect", ["mediaconnect", "web"]),
-        ("android-ios", ["android", "ios"]),
-        ("web-mweb", ["web", "mweb"]),
-        ("full-matrix", ["web_embedded", "tv", "tv_embedded", "ios", "android", "web_creator", "web_music"]),
+        ("default", preferred[:4]),
+        ("tv-embedded", ["tv_embedded", "tv"]),
+        ("ios", ["ios"]),
+        ("android", ["android"]),
+        ("web-embedded", ["web_embedded"]),
+        ("full", [c for c in preferred if c in YOUTUBE_PLAYER_CLIENTS][:8]),
     ]
     seen: set[tuple[str, ...]] = set()
     out: list[tuple[str, list[str]]] = []
@@ -1180,23 +1174,25 @@ def is_cdn_rejection(exc: BaseException | None) -> bool:
 
 
 def _video_format_candidates(format_id: str = "best") -> list[str]:
-    """Return yt-dlp format fallbacks that strongly prefer video+audio merged output.
+    """Build yt-dlp format fallbacks that prefer video+audio merged output.
 
-    The FINAL fallback in every chain must never raise "Requested format is
-    not available": split-only platforms (e.g. Pinterest HLS, where video and
-    audio live in SEPARATE renditions with no combined format) would hit that
-    error on ``best`` / ``worst`` / ``best[acodec!=none][vcodec!=none]`` and
-    the real root cause (usually a missing ffmpeg merge) would be masked.
-    The universal escape hatch is ``bestvideo*+bestaudio*/best*`` — any
-    rendition matches, and the central audio guard rejects silent files
-    afterwards instead of failing with a misleading yt-dlp format error.
+    Accepts three input shapes:
+
+      * a FULL yt-dlp selector (contains ``/ [ +``) — YouTube quality rows
+        carry these; use them verbatim instead of nesting them inside
+        ``bestvideo[format_id=<selector>]`` (the old nesting produced the
+        bogus "Requested format is not available" on Smart Download);
+      * a height label (``1080p`` / ``720p``) or ``best``/``hd``/``sd`` —
+        translate it into a capped bestvideo+bestaudio merge chain;
+      * a concrete format id (``137`` …) from a non-YouTube scraper — keep
+        the legacy nesting behaviour.
+
+    Every chain ends in ``bestvideo*+bestaudio*/best*`` so a split-only stream
+    (video and audio in SEPARATE renditions with no combined format) never
+    raises "Requested format is not available"; the central audio guard
+    rejects silent output afterwards instead.
     """
     requested = str(format_id or "best").strip()
-    # Quality-first selectors: prefer H.264 (avc) video inside MP4 + m4a audio.
-    # H.264/AAC is what Telegram hardware-accelerates, so the "best" pick is not
-    # just the highest resolution but the highest resolution that plays smoothly
-    # and merges cleanly. VP9/AV1 rows are still reachable through the later
-    # fallbacks when a platform offers nothing else.
     merged_best = (
         "bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]"
         "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
@@ -1217,12 +1213,31 @@ def _video_format_candidates(format_id: str = "best") -> list[str]:
         "/best[acodec!=none][vcodec!=none]"
         "/bestvideo*+bestaudio*/best*"
     )
-    # Synthetic quality labels ("hd" / "sd" / "high") used by single-file
-    # platforms (Facebook/Twitter/Reddit/Pinterest) must map to a REAL
-    # bestvideo+bestaudio merge, not to a format id like "hd" that doesn't
-    # exist in yt-dlp (which would burn the first fallback).
-    if requested in {"best", "best_quality", "hd", "high", "sd"}:
+
+    # A full yt-dlp selector already — pass through unchanged (Smart Download).
+    if any(ch in requested for ch in ("/", "[", "+")):
+        return [requested, merged_720, merged_best, safe_small]
+
+    lowered = requested.lower()
+    # Only "1080p"-style labels are height caps; a bare numeric "137" is a
+    # concrete yt-dlp format id and must keep the legacy nesting behaviour.
+    height_m = re.search(r"(\d{3,4})p\b", lowered)
+    height = int(height_m.group(1)) if height_m else 0
+    synthetic = lowered in {"best", "best_quality", "hd", "high", "sd", "max", "highest"}
+    if synthetic or height:
+        if height:
+            capped = (
+                f"bestvideo[height<={height}][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]"
+                f"/bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]"
+                f"/bestvideo[height<={height}]+bestaudio"
+                f"/best[height<={height}][acodec!=none][vcodec!=none]"
+                f"/best[height<={height}]"
+                "/bestvideo*+bestaudio*/best*"
+            )
+            return [capped, merged_720, merged_best, safe_small]
         return [merged_best, merged_720, safe_small]
+
+    # Concrete format id from a non-YouTube scraper.
     return [
         f"{requested}+bestaudio[ext=m4a]/{requested}+bestaudio/bestvideo[format_id={requested}]+bestaudio",
         merged_720,

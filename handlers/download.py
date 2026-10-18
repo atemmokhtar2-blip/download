@@ -903,16 +903,29 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.exception("Download error for user=%s url=%s: %s", user.id, str(info.get("url", ""))[:120], e)
         # CDN segment rejection (expired token / geo-block / rate-limit) gets a
-        # short, human, actionable message; every other failure gets a plain
+        # short, human, actionable message; YouTube bot-checks and unavailable
+        # formats get their own clear message; every other failure gets a plain
         # "try again". The FULL technical reason lives only in the server logs
         # and the clone-failure records — NEVER in the user's chat.
         empty_cdn = is_cdn_rejection(e)
-        reason = "cdn_rejected" if empty_cdn else summarize_error(e)
+        _low = str(e or "").lower()
+        yt_blocked = any(k in _low for k in (
+            "sign in to confirm", "login required", "not a bot",
+            "requested format is not available",
+        ))
+        reason = "cdn_rejected" if empty_cdn else ("youtube_blocked" if yt_blocked else summarize_error(e))
         _log_clone_failure(context, user.id, str(info.get("url") or ""), reason,
                            platform=str(info.get("platform") or ""))
         try:
             if empty_cdn:
                 await _quiet_edit(edit_fn, t(lang, "cdn_rejected"), parse_mode="HTML")
+            elif yt_blocked:
+                await _quiet_edit(
+                    edit_fn,
+                    "🛡 <b>يوتيوب طلب تحقّقًا بشريًا أو الصيغة المطلوبة غير متاحة مؤقتًا.</b>\n"
+                    "جرّب جودة أقل أو أعد المحاولة بعد قليل، أو أرسل رابطًا آخر.",
+                    parse_mode="HTML",
+                )
             else:
                 await _quiet_edit(edit_fn, t(lang, "download_failed"))
         except Exception:
