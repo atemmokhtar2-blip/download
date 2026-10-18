@@ -1532,6 +1532,10 @@ async def _sub_test(context, query):
         "• لو ظهر خطأ، راجع معرّف القناة وتأكد أن البوت موجود فيها.")
     await _edit(query, "\n".join(lines), parse_mode="HTML",
                 reply_markup=_kb(_back("own_sub", "🔙 الاشتراك الإجباري")))
+
+
+def _perms_screen() -> tuple[str, InlineKeyboardMarkup]:
+    """Build the owner-only staff and role management screen."""
     staff = list_extra_admins()
     text = (
         "🛡️ <b>إدارة المشرفين والرتب</b>\n\n"
