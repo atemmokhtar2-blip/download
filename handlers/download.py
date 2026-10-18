@@ -373,6 +373,12 @@ def _friendly_error(lang: str, info: dict) -> str:
         return t(lang, "spotify_metadata_only")
     if reason in {"spotify_drm_protected", "private_or_login_required"}:
         return t(lang, "spotify_drm_protected")
+    if reason == "login_or_age_or_private_required":
+        return (
+            "🛡 <b>يوتيوب منع تنزيل هذا المحتوى</b>\n\n"
+            "يتطلب الفيديو تسجيل دخول، أو أنه مقيد بعمر/منطقة، أو أنه خاص.\n"
+            "جرّب رابطًا آخر — المحتوى العام غير المقيد يعمل مباشرة."
+        )
     if reason == "region_or_availability_blocked":
         return t(lang, "region_blocked")
     if reason == "removed_or_not_found":
@@ -909,10 +915,12 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # and the clone-failure records — NEVER in the user's chat.
         empty_cdn = is_cdn_rejection(e)
         _low = str(e or "").lower()
-        yt_blocked = any(k in _low for k in (
-            "sign in to confirm", "login required", "not a bot",
-            "requested format is not available",
+        bot_check = bool(getattr(e, "bot_check", False)) or any(k in _low for k in (
+            "sign in to confirm", "not a bot", "login required",
+            "age-restricted", "members-only",
         ))
+        format_exhausted = bool(getattr(e, "format_exhausted", False))
+        yt_blocked = bot_check or format_exhausted or "requested format is not available" in _low
         reason = "cdn_rejected" if empty_cdn else ("youtube_blocked" if yt_blocked else summarize_error(e))
         _log_clone_failure(context, user.id, str(info.get("url") or ""), reason,
                            platform=str(info.get("platform") or ""))
@@ -920,12 +928,20 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if empty_cdn:
                 await _quiet_edit(edit_fn, t(lang, "cdn_rejected"), parse_mode="HTML")
             elif yt_blocked:
-                await _quiet_edit(
-                    edit_fn,
-                    "🛡 <b>يوتيوب طلب تحقّقًا بشريًا أو الصيغة المطلوبة غير متاحة مؤقتًا.</b>\n"
-                    "جرّب جودة أقل أو أعد المحاولة بعد قليل، أو أرسل رابطًا آخر.",
-                    parse_mode="HTML",
-                )
+                if bot_check:
+                    msg = (
+                        "🛡 <b>يوتيوب طلب تسجيل دخول أو تحقّقًا بشريًا لهذا الفيديو.</b>\n"
+                        "البوت لا يستطيع تجاوز هذا الحاجز تلقائيًا.\n\n"
+                        "• جرّب رابطًا آخر\n"
+                        "• أو فعّل الكوكيز/PO token من إعدادات الاستضافة\n"
+                        "• أو أعد المحاولة لاحقًا"
+                    )
+                else:
+                    msg = (
+                        "🛡 <b>الصيغة المطلوبة غير متاحة لهذا الفيديو.</b>\n"
+                        "جرّب جودة أقل أو رابطًا آخر."
+                    )
+                await _quiet_edit(edit_fn, msg, parse_mode="HTML")
             else:
                 await _quiet_edit(edit_fn, t(lang, "download_failed"))
         except Exception:

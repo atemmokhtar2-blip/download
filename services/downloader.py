@@ -1159,6 +1159,27 @@ def _is_empty_file_error(exc: BaseException | None) -> bool:
     return "file is empty" in text or "empty file" in text
 
 
+def _is_youtube_bot_check(exc: BaseException | None) -> bool:
+    """True when YouTube refused the request with a login / human-verification gate.
+
+    These failures are identical across every ``player_client`` profile — the
+    fix is a different video or an owner-supplied cookie/PO token, NOT another
+    retry. Recognising them lets the download loops abort after the first hit.
+    """
+    text = str(exc or "").lower()
+    return any(k in text for k in (
+        "sign in to confirm", "not a bot", "login required",
+        "age-restricted", "members-only", "this video is private",
+        "private video", "sign in", "cookies",
+    ))
+
+
+def _is_youtube_format_error(exc: BaseException | None) -> bool:
+    """True for "Requested format is not available" (not a network failure)."""
+    text = str(exc or "").lower()
+    return "requested format" in text and "not available" in text
+
+
 def is_cdn_rejection(exc: BaseException | None) -> bool:
     """Public counterpart of :func:`_is_empty_file_error` for the UI layer.
 
@@ -1326,6 +1347,20 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
                         )
                         target_dead = True
                         break
+                    if "youtu" in host and _is_youtube_bot_check(exc):
+                        # Same gate on EVERY player profile — stop the matrix now.
+                        raise DownloadImpossibleError(
+                            "YouTube requested sign-in / human verification for this content. "
+                            "Supply cookies or a PO token, or send a different link.",
+                            bot_check=True,
+                        )
+                    if _is_youtube_format_error(exc) and fmt == formats[-1]:
+                        # The universal `bestvideo*+bestaudio*/best*` tail also
+                        # reported no available format → zero playable streams.
+                        raise DownloadImpossibleError(
+                            "YouTube returned no playable format for this video.",
+                            format_exhausted=True,
+                        )
                     continue
 
     if last_error:
@@ -1427,6 +1462,12 @@ async def _generic_download_audio(url: str, progress=None, bitrate: str | None =
                 if _is_empty_file_error(exc):
                     stream_rejected = True
                     break
+                if "youtu" in host and _is_youtube_bot_check(exc):
+                    raise DownloadImpossibleError(
+                        "YouTube requested sign-in / human verification for this audio. "
+                        "Supply cookies or a PO token, or send a different link.",
+                        bot_check=True,
+                    )
                 continue
 
     if last_error:
