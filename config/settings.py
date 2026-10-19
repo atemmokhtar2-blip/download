@@ -33,6 +33,12 @@ DOWNLOAD_SOCKET_TIMEOUT = min(int(os.getenv("DOWNLOAD_SOCKET_TIMEOUT", "60")), D
 MAX_FRAGMENT_CONCURRENCY = max(2, min(int(os.getenv("MAX_FRAGMENT_CONCURRENCY", "8")), 16))
 HTTP_CHUNK_SIZE_MB = max(1, min(int(os.getenv("HTTP_CHUNK_SIZE_MB", "16")), 64))
 ALBUM_CONCURRENCY = max(1, min(int(os.getenv("ALBUM_CONCURRENCY", "3")), 6))
+# Hard cap on simultaneous ffmpeg/ffprobe subprocesses across the WHOLE process.
+# Ten concurrent downloads can each spawn a merge + faststart remux + MP3
+# transcode (30 processes), which saturates CPU and can trip the kernel OOM
+# killer. This semaphore bounds the heavy video/audio tooling so throughput
+# stays high without destabilising the host.
+FFMPEG_MAX_CONCURRENT = max(1, min(int(os.getenv("FFMPEG_MAX_CONCURRENT", "4")), 8))
 # Moving-window cooldown: RATE_LIMIT_BURST hits allowed per RATE_LIMIT_SECONDS.
 RATE_LIMIT_SECONDS = int(os.getenv("RATE_LIMIT_SECONDS", "15"))
 RATE_LIMIT_BURST = int(os.getenv("RATE_LIMIT_BURST", "2"))

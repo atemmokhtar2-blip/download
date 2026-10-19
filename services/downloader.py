@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,7 +21,7 @@ from config.settings import (
     MAX_FILE_SIZE_BYTES, TEMP_DIR, DOWNLOAD_TIMEOUT, DOWNLOAD_SOCKET_TIMEOUT,
     DOWNLOAD_PROXY, MAX_FRAGMENT_CONCURRENCY, HTTP_CHUNK_SIZE_MB, ALBUM_CONCURRENCY,
     YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, YTDLP_CLIENT,
-    AUDIO_BITRATE, AUDIO_BITRATE_HIGH,
+    AUDIO_BITRATE, AUDIO_BITRATE_HIGH, FFMPEG_MAX_CONCURRENT,
 )
 from middlewares.cancellation import DownloadCancelledError
 from services.content_intelligence import build_content_intelligence
@@ -28,6 +31,13 @@ ALBUM_MAX_ITEMS = 10
 QUALITY_MAX_ROWS = 6
 _STANDARD_HEIGHTS = (2160, 1440, 1080, 720, 480, 360, 240, 144)
 logger = logging.getLogger(__name__)
+
+# Bounded gate over the heavy ffmpeg/ffprobe subprocesses across the whole
+# process. A burst of concurrent downloads can otherwise spawn merge + remux +
+# transcode processes all at once, saturating CPU and inviting the kernel OOM
+# killer. The semaphore throttles the tooling (not the network I/O) so
+# throughput stays high without destabilising the host.
+_ffmpeg_sem = threading.Semaphore(FFMPEG_MAX_CONCURRENT)
 
 # ffmpeg flags that make the HLS fallback paths dramatically faster and more
 # resilient: all CPU cores for decode/mux, reconnect-on-drop for flaky segment
@@ -543,32 +553,33 @@ def _run_process_cancellable(cmd: list[str], check_size, timeout: int = 90) -> b
     This is what makes 🛑 stop a mid-flight ffmpeg run instead of blocking for
     up to ``timeout`` seconds.
     """
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    deadline = time.monotonic() + timeout
-    try:
-        while proc.poll() is None:
-            if time.monotonic() > deadline:
+    with _ffmpeg_sem:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.monotonic() + timeout
+        try:
+            while proc.poll() is None:
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    proc.wait()
+                    raise TimeoutError("process timed out")
+                if check_size is not None:
+                    check_size()
+                time.sleep(0.05)
+        except BaseException:
+            # Cancellation, size guard, or any other abort: never leave a stray
+            # ffmpeg running that would hold the temp file open after we delete it.
+            if proc.poll() is None:
                 proc.kill()
-                proc.wait()
-                raise TimeoutError("process timed out")
-            if check_size is not None:
-                check_size()
-            time.sleep(0.05)
-    except BaseException:
-        # Cancellation, size guard, or any other abort: never leave a stray
-        # ffmpeg running that would hold the temp file open after we delete it.
-        if proc.poll() is None:
-            proc.kill()
-            try:
-                proc.wait(timeout=3)
-            except Exception:
-                pass
-        raise
-    return proc.returncode == 0
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    pass
+            raise
+        return proc.returncode == 0
 
 
 def _rate_metrics(downloaded: int, total: int, elapsed_seconds: float) -> tuple[float, int]:
@@ -743,7 +754,7 @@ def _download_direct_sync(
                 if result == "retry":
                     _safe_remove(out_path)
                     if attempt + 1 < attempts:
-                        time.sleep(0.5 * (2 ** attempt))
+                        time.sleep(0.5 * (2 ** attempt) + random.uniform(0, 0.4))
                         continue
                     return None
                 _safe_remove(out_path)
@@ -757,7 +768,7 @@ def _download_direct_sync(
         except requests.RequestException as exc:
             _safe_remove(out_path)
             if attempt + 1 < attempts:
-                time.sleep(0.5 * (2 ** attempt))
+                time.sleep(0.5 * (2 ** attempt) + random.uniform(0, 0.4))
                 continue
             logger.warning("Direct CDN download failed after retries: %s", exc)
             return None
@@ -981,19 +992,20 @@ def merge_hls_video_audio(
     for pass_args in passes:
         _safe_remove(out_path)
         try:
-            proc = subprocess.run(
-                [
-                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                    *_inputs(),
-                    *pass_args,
-                    out_path,
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
+            with _ffmpeg_sem:
+                proc = subprocess.run(
+                    [
+                        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                        *_inputs(),
+                        *pass_args,
+                        out_path,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
             if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) >= 2048:
                 return out_path
             logger.debug(
@@ -1177,6 +1189,40 @@ def _prepare_video_for_delivery(
     if allow_large:
         return path
     return _remux_mp4_faststart(path, cancel_check=cancel_check)
+
+
+async def prepare_video_async(
+    path: str | None,
+    *,
+    source: str = "video",
+    allow_large: bool = False,
+    cancel_check=None,
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> str | None:
+    """Non-blocking twin of :func:`_prepare_video_for_delivery`.
+
+    The synchronous guard runs ffprobe (an up-to-20s subprocess) plus a ffmpeg
+    faststart remux (a 50ms-polling subprocess up to 90s). Running those on the
+    asyncio event loop freezes the ENTIRE bot — other users' buttons, queued
+    downloads and analysis requests all stall behind one ffmpeg run. This helper
+    moves the same work onto the shared download executor so the event loop stays
+    responsive under load. ``functools.partial`` resolves the module-level
+    function lazily, so test monkeypatches of ``_prepare_video_for_delivery``
+    keep working exactly as before.
+    """
+    from middlewares.concurrency import get_executor
+
+    loop = loop or asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        get_executor(),
+        functools.partial(
+            _prepare_video_for_delivery,
+            path,
+            source=source,
+            allow_large=allow_large,
+            cancel_check=cancel_check,
+        ),
+    )
 
 
 def extract_audio_mp3(path: str, bitrate: str = "192", cancel_check=None) -> str | None:
@@ -1778,7 +1824,7 @@ async def download_video(url: str, format_id: str = "best", quality_label: str =
     cancel_check = getattr(progress, "cancel_check", None)
     try:
         path = await engine.download_video(url, format_id, quality_label, progress, play_url)
-        path = _prepare_video_for_delivery(
+        path = await prepare_video_async(
             path,
             source=f"engine:{getattr(engine, 'name', 'unknown')}",
             allow_large=allow_large,
@@ -1903,13 +1949,12 @@ async def download_audio(url: str, progress=None, bitrate: str | None = None) ->
 _enforce_max_file_size = _check_size
 
 
-async def download_image(url: str, image_url: str | None = None, progress=None) -> str | None:
+def _download_image_sync(target: str, cancel_check) -> str | None:
+    """Blocking core of :func:`download_image` — runs on the download executor."""
     import requests
     from utils.url_safety import is_public_url
 
-    cancel_check = getattr(progress, "cancel_check", None)
-    target = image_url or url
-    safe, _guard_reason = await asyncio.to_thread(is_public_url, target)
+    safe, _guard_reason = is_public_url(target)
     if not safe:
         logger.warning("Blocked image download (SSRF guard) for %s", str(target)[:120])
         raise RuntimeError("blocked_url")
@@ -1983,6 +2028,20 @@ async def download_image(url: str, image_url: str | None = None, progress=None) 
         _safe_remove(path)
         raise RuntimeError("image too small")
     return _check_size(path)
+
+
+async def download_image(url: str, image_url: str | None = None, progress=None) -> str | None:
+    """Download a single image without blocking the asyncio event loop.
+
+    The SSRF guard, TLS handshake and streamed disk write are all synchronous
+    I/O; running them inside a ``download_album`` gather previously froze the
+    entire bot behind slow image CDNs. The whole operation now executes on the
+    shared download executor so message routing and every other user keep
+    running while images stream.
+    """
+    cancel_check = getattr(progress, "cancel_check", None)
+    target = image_url or url
+    return await asyncio.to_thread(_download_image_sync, target, cancel_check)
 
 
 async def download_album(items: list[dict], progress=None) -> list[dict]:

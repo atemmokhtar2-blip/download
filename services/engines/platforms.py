@@ -416,7 +416,7 @@ class PinterestEngine(PlatformEngine):
                             target,
                             hls_out,
                         )
-                    path = downloader._prepare_video_for_delivery(
+                    path = await downloader.prepare_video_async(
                         path,
                         source=f"pinterest-hls:{candidate['provider']}",
                         cancel_check=cancel_check,
@@ -659,7 +659,7 @@ class TwitterEngine(PlatformEngine):
                         loop,
                         "xdl-twitter",
                     )
-                direct_path = downloader._prepare_video_for_delivery(
+                direct_path = await downloader.prepare_video_async(
                     direct_path, source=f"twitter-direct:{source}", cancel_check=cancel_check
                 )
                 if direct_path:
@@ -809,7 +809,7 @@ class RedditEngine(PlatformEngine):
                         loop,
                         "xdl-reddit",
                     )
-                direct_path = downloader._prepare_video_for_delivery(direct_path, source=f"reddit-direct:{source}")
+                direct_path = await downloader.prepare_video_async(direct_path, source=f"reddit-direct:{source}")
                 if direct_path:
                     return direct_path
                 download_logger.info("Reddit direct candidate failed/was silent source=%s", source)

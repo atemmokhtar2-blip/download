@@ -6,10 +6,22 @@ variation selectors.
 """
 from __future__ import annotations
 
+import inspect
 import re
 from telegram import (
     InlineKeyboardButton as _TelegramInlineKeyboardButton,
     KeyboardButton as _TelegramKeyboardButton,
+)
+
+# Telegram added the native `style=` field (primary/success/danger) in a
+# specific python-telegram-bot line, but production can run on an older build
+# where passing it raises ``TypeError: __init__() got an unexpected keyword
+# argument 'style'``. Detect support once at import time instead of assuming
+# the runtime version, so the same code styles buttons on new builds AND
+# degrades gracefully to plain buttons on old ones (never a crash).
+_HAS_STYLE = (
+    "style" in inspect.signature(_TelegramInlineKeyboardButton.__init__).parameters
+    and "style" in inspect.signature(_TelegramKeyboardButton.__init__).parameters
 )
 
 _EMOJI_RE = re.compile(
@@ -73,7 +85,10 @@ def inline_button(text: str, *args, **kwargs):
     explicit_style = kwargs.pop("style", None)
     callback_data = kwargs.get("callback_data")
     style = _button_style(label, callback_data, explicit_style)
-    if style:
+    # Only forward the native colour style when the installed runtime actually
+    # supports it; otherwise a single `style=` kwarg crashes EVERY keyboard
+    # build. Old builds get plain buttons, never a TypeError.
+    if style and _HAS_STYLE:
         kwargs["style"] = style
     return _TelegramInlineKeyboardButton(label, *args, **kwargs)
 
@@ -82,5 +97,5 @@ def reply_button(text: str, style: str | None = None):
     """Create a reply-keyboard button using Telegram's native style field."""
     label = str(text or "").strip()
     chosen_style = _button_style(label, explicit=style)
-    kwargs = {"style": chosen_style} if chosen_style else {}
+    kwargs = {"style": chosen_style} if (chosen_style and _HAS_STYLE) else {}
     return _TelegramKeyboardButton(label, **kwargs)
