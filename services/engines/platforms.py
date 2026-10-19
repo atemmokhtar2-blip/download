@@ -138,7 +138,7 @@ class TikTokEngine(PlatformEngine):
                     get_executor(), download_tiktok_direct, candidate, f"{direct_out}-{idx}"
                 )
                 if path:
-                    path = downloader._prepare_video_for_delivery(path, source=f"tiktok-direct:{item.get('provider')}")
+                    path = await downloader.prepare_video_async(path, source=f"tiktok-direct:{item.get('provider')}")
                     if path:
                         if progress_callback:
                             try:
@@ -266,7 +266,7 @@ class InstagramEngine(PlatformEngine):
                     loop,
                     "xdl-instagram",
                 )
-                path = downloader._prepare_video_for_delivery(path, source=f"instagram-direct:{source}")
+                path = await downloader.prepare_video_async(path, source=f"instagram-direct:{source}")
                 if path:
                     return path
                 download_logger.info("Instagram direct candidate failed/was silent source=%s", source)
@@ -432,7 +432,7 @@ class PinterestEngine(PlatformEngine):
                         loop,
                         "xdl-pinterest",
                     )
-                    path = downloader._prepare_video_for_delivery(
+                    path = await downloader.prepare_video_async(
                         path,
                         source=f"pinterest-direct:{candidate['provider']}",
                         cancel_check=cancel_check,
@@ -987,7 +987,7 @@ class EmbedFallbackEngine(YtDlpFallbackEngine):
                         loop,
                         f"xdl-{self.platform_label.lower()}-{idx}",
                     )
-                path = downloader._prepare_video_for_delivery(path, source=f"{self.name}:direct")
+                path = await downloader.prepare_video_async(path, source=f"{self.name}:direct")
                 if path:
                     return path
                 download_logger.info("%s direct candidate failed/was silent idx=%s", self.name, idx)
@@ -1078,7 +1078,7 @@ class VimeoEngine(PlatformEngine):
                     loop,
                     f"xdl-vimeo-{idx}",
                 )
-                path = downloader._prepare_video_for_delivery(path, source="vimeo-direct")
+                path = await downloader.prepare_video_async(path, source="vimeo-direct")
                 if path:
                     return path
                 download_logger.info("Vimeo direct candidate failed/was silent idx=%s", idx)
@@ -1233,7 +1233,7 @@ class ImgurEngine(PlatformEngine):
                     loop,
                     f"xdl-imgur-{idx}",
                 )
-                path = downloader._prepare_video_for_delivery(path, source="imgur-direct")
+                path = await downloader.prepare_video_async(path, source="imgur-direct")
                 if path:
                     return path
                 download_logger.info("Imgur direct candidate failed/was silent idx=%s", idx)
@@ -1318,7 +1318,7 @@ class StreamableEngine(PlatformEngine):
                     loop,
                     f"xdl-streamable-{idx}",
                 )
-                path = downloader._prepare_video_for_delivery(path, source="streamable-direct")
+                path = await downloader.prepare_video_async(path, source="streamable-direct")
                 if path:
                     return path
                 download_logger.info("Streamable direct candidate failed/was silent idx=%s", idx)
@@ -1403,7 +1403,7 @@ class CoubEngine(PlatformEngine):
                     loop,
                     f"xdl-coub-{idx}",
                 )
-                path = downloader._prepare_video_for_delivery(path, source="coub-direct")
+                path = await downloader.prepare_video_async(path, source="coub-direct")
                 if path:
                     return path
                 download_logger.info("Coub direct candidate failed/was silent idx=%s", idx)

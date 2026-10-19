@@ -921,20 +921,22 @@ def download_hls_mp4(play_url: str, prefix: str = "xdl-hls", headers: dict | Non
     for pass_args in passes:
         _safe_remove(out_path)
         try:
-            proc = subprocess.run(
-                [
-                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                    *header_args,
-                    "-i", play_url,
-                    *pass_args,
-                    out_path,
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
+            with _ffmpeg_sem:
+                proc = subprocess.run(
+                    [
+                        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                        *header_args,
+                        *_HLS_FFMPEG_FAST_FLAGS,
+                        "-i", play_url,
+                        *pass_args,
+                        out_path,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
             if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) >= 2048:
                 return out_path
             logger.debug("HLS download pass failed for %s: %s", str(play_url)[:120], proc.stderr[-300:])
@@ -1076,21 +1078,22 @@ def _has_audio_stream(path: str) -> bool | None:
     ffprobe = _ffprobe_path()
     if ffprobe:
         try:
-            proc = subprocess.run(
-                [
-                    ffprobe,
-                    "-v", "error",
-                    "-select_streams", "a",
-                    "-show_entries", "stream=index",
-                    "-of", "json",
-                    path,
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=20,
-                check=False,
-            )
+            with _ffmpeg_sem:
+                proc = subprocess.run(
+                    [
+                        ffprobe,
+                        "-v", "error",
+                        "-select_streams", "a",
+                        "-show_entries", "stream=index",
+                        "-of", "json",
+                        path,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
             if proc.returncode == 0:
                 payload = json.loads(proc.stdout or "{}")
                 return bool(payload.get("streams"))
@@ -1102,14 +1105,15 @@ def _has_audio_stream(path: str) -> bool | None:
     if not ffmpeg:
         return None
     try:
-        proc = subprocess.run(
-            [ffmpeg, "-hide_banner", "-i", path, "-f", "null", "-"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=25,
-            check=False,
-        )
+        with _ffmpeg_sem:
+            proc = subprocess.run(
+                [ffmpeg, "-hide_banner", "-i", path, "-f", "null", "-"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=25,
+                check=False,
+            )
         output = f"{proc.stdout or ''}\n{proc.stderr or ''}".lower()
         has_audio_stream = re.search(r"stream #\S*:.*audio:", output) is not None
         has_video_stream = re.search(r"stream #\S*:.*video:", output) is not None
@@ -1504,11 +1508,12 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
                 try:
                     sync_fn = _download_sync_no_limit if allow_large else _download_sync
                     path = await _run_sync(sync_fn, target, opts)
-                    path = _prepare_video_for_delivery(
+                    path = await prepare_video_async(
                         path,
                         source=f"yt-dlp:{target_kind}",
                         allow_large=allow_large,
                         cancel_check=cancel_check,
+                        loop=loop,
                     )
                     if path:
                         if target_kind != "page-url" or fmt != formats[0] or profile_name != client_profiles[0][0]:
