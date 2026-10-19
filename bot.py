@@ -69,8 +69,14 @@ async def unknown_callback(update: Update, context):
 
 
 async def message_router(update: Update, context):
-    """Route text messages — handle menu buttons and URLs."""
-    text = (update.message.text or "").strip()
+    """Route private/user text messages — ignore channel posts and non-user updates."""
+    message = update.effective_message
+    # filters.TEXT can also match channel_post updates. Those have no
+    # update.message/from_user, and treating them like user input crashes with
+    # "'NoneType' object has no attribute 'text'". Only route real user messages.
+    if message is None or message.from_user is None or not message.text:
+        return
+    text = message.text.strip()
 
     # Secure clone-token capture runs FIRST: while a user is in the
     # awaiting-token state, any text they send is treated as the token,

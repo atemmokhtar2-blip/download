@@ -54,7 +54,7 @@ def test_engine_registry_matches_dashboard() -> None:
     engines = registered_engines()
     dashboard = list_engines()
     bespoke_names = [item["name"] for item in dashboard if item["name"] != "UniversalEngine"]
-    assert len(engines) == 29
+    assert len(engines) == 63
     assert bespoke_names == [engine.name for engine in engines]
     assert all(item["status"] == "ready" for item in dashboard)
     universal = next(item for item in dashboard if item["name"] == "UniversalEngine")

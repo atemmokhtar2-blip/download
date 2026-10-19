@@ -699,7 +699,9 @@ class TwitterEngine(PlatformEngine):
                 error_logger.error(
                     "TwitterEnginePro page fallback failed for %s: %s", page_url[:90], exc
                 )
-        return None
+        raise RuntimeError(
+            "The media stream returned zero data — the host CDN rejected or expired the segment URLs."
+        )
 
 
 class RedditEngine(PlatformEngine):

@@ -266,6 +266,9 @@ def _youtube_client_profiles() -> list[tuple[str, list[str]]]:
         ("ios", ["ios"]),
         ("android", ["android"]),
         ("web-embedded", ["web_embedded"]),
+        ("embedded", ["web_embedded", "tv_embedded"]),
+        ("music", ["ios_music", "android_music", "web_music", "mediaconnect"]),
+        ("mediaconnect", ["mediaconnect"]),
         ("full", [c for c in preferred if c in YOUTUBE_PLAYER_CLIENTS][:8]),
     ]
     seen: set[tuple[str, ...]] = set()
