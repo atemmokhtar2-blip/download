@@ -1124,6 +1124,13 @@ async def _run_download(query, context, info, user, lang, quality_label,
 
             async def album_progress(prog):
                 try:
+                    # Only per-item notifications carry "album_index". The
+                    # individual yt-dlp/CND progress events forwarded by
+                    # download_video/download_image for the CURRENT item must
+                    # be ignored here so they never overwrite the correct
+                    # "item X/N" line with a bogus 0/N.
+                    if not isinstance(prog, dict) or "album_index" not in prog:
+                        return
                     idx = prog.get("album_index", 0)
                     tot = prog.get("album_total", len(items))
                     txt = t(lang, "album_downloading", current=idx, total=tot)
