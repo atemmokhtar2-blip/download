@@ -1244,7 +1244,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
 
         elif is_image:
             await ui.status(t(lang, "preparing_download"), signature="preparing-image")
-            file_path = await download_image(info["url"], info.get("image_url"))
+            file_path = await download_image(info["url"], info.get("image_url"), ui)
             ui.end_download()
             if not file_path: raise Exception("Download failed")
             _enforce_user_size(file_path, settings)

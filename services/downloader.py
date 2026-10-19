@@ -339,12 +339,23 @@ def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> 
             if cancel_check is not None:
                 cancel_check()
 
+        # yt-dlp calls the progress hook on EVERY downloaded fragment (dozens
+        # per second). Scheduling a coroutine at that rate would flood the event
+        # loop even though the UI only honors one edit every ~1.8s. Cap actual
+        # SCHEDULING to once per second, but let the final event through so the
+        # "processing" phase can appear.
+        last_report = {"ts": 0.0}
+
         def hook(d):
             _cancel_from_hook()
             if d.get("status") != "downloading":
                 return
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
             downloaded = d.get("downloaded_bytes") or 0
+            now = time.monotonic()
+            if (now - last_report["ts"]) < 1.0 and not (total and downloaded >= total):
+                return
+            last_report["ts"] = now
             pct = int(downloaded * 100 / total) if total else 0
             try:
                 asyncio.run_coroutine_threadsafe(progress({
@@ -1809,10 +1820,11 @@ async def download_audio(url: str, progress=None, bitrate: str | None = None) ->
 _enforce_max_file_size = _check_size
 
 
-async def download_image(url: str, image_url: str | None = None) -> str | None:
+async def download_image(url: str, image_url: str | None = None, progress=None) -> str | None:
     import requests
     from utils.url_safety import is_public_url
 
+    cancel_check = getattr(progress, "cancel_check", None)
     target = image_url or url
     safe, _guard_reason = await asyncio.to_thread(is_public_url, target)
     if not safe:
@@ -1857,6 +1869,8 @@ async def download_image(url: str, image_url: str | None = None) -> str | None:
             for chunk in r.iter_content(chunk_size=256 * 1024):
                 if not chunk:
                     continue
+                if cancel_check is not None:
+                    cancel_check()
                 if downloaded + len(chunk) > MAX_FILE_SIZE_BYTES:
                     _safe_remove(path)
                     raise FileTooLargeError(
@@ -1890,14 +1904,19 @@ async def download_image(url: str, image_url: str | None = None) -> str | None:
 
 async def download_album(items: list[dict], progress=None) -> list[dict]:
     downloaded = []
+    cancel_check = getattr(progress, "cancel_check", None)
     for idx, item in enumerate(items[:ALBUM_MAX_ITEMS], start=1):
+        # 🛑 honoured between items AND inside each item (the progress object's
+        # cancel_check is forwarded to download_video / download_image).
+        if cancel_check is not None:
+            cancel_check()
         if progress:
             await progress({"album_index": idx, "album_total": min(len(items), ALBUM_MAX_ITEMS)})
         if item.get("type") == "image":
-            path = await download_image(item.get("url"), item.get("url"))
+            path = await download_image(item.get("url"), item.get("url"), progress)
             item_type = "image"
         else:
-            path = await download_video(item.get("url"), "best", "best")
+            path = await download_video(item.get("url"), "best", "best", progress)
             item_type = "video"
         if path:
             downloaded.append({"path": path, "title": item.get("title") or f"item-{idx}", "type": item_type})
