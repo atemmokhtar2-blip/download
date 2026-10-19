@@ -1199,6 +1199,69 @@ def _remux_mp4_faststart(path: str, cancel_check=None) -> str:
         return path
 
 
+# ---------------------------------------------------------------------------
+# Post-download guard idempotency registry.
+#
+# ``_prepare_video_for_delivery`` (reached via ``prepare_video_async``) is the
+# project's single "verify audio + faststart-remux" gate. It is applied from
+# TWO layers:
+#   1. inside every specialized engine, once PER DIRECT CANDIDATE, so a silent
+#      CDN URL is rejected and the next candidate is tried; and
+#   2. inside the public :func:`download_video` chokepoint, as the final net.
+# The result is that a successfully downloaded file historically went through
+# ``ffprobe`` + an ffmpeg ``faststart`` remux TWICE on every delivery — each a
+# real subprocess (up to 20s of probbing plus a full-file copy remux) that also
+# holds one of the bounded ``_ffmpeg_sem`` slots. That doubled post-processing
+# time and halved effective ffmpeg throughput under concurrency for no benefit.
+#
+# This registry records the (absolute path → stat identity) of files that have
+# ALREADY passed the full guard, so the chokepoint's second pass becomes a cheap
+# no-op while the per-candidate guard inside engines is preserved exactly as
+# before. The identity check (mtime_ns + size) guarantees a file that was later
+# replaced or modified is never wrongly skipped; stale entries are dropped once
+# the file is deleted and the whole map is bounded so a long-lived process never
+# leaks memory. Invariant relied upon: the chokepoint is always the LAST guard
+# call for a file, so a recorded file is always already faststart-remuxed when
+# the caller asks for ``allow_large=False``.
+_prepare_lock = threading.Lock()
+_prepared_files: dict[str, tuple[int, int]] = {}
+_PREPARED_FILES_MAX = 512
+
+
+def _file_stat_identity(path: str) -> tuple[int, int] | None:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _was_prepared(path: str) -> bool:
+    key = os.path.abspath(path)
+    identity = _file_stat_identity(path)
+    with _prepare_lock:
+        recorded = _prepared_files.get(key)
+        if recorded is None:
+            return False
+        if identity is None:
+            # File was deleted after upload — drop the stale marker.
+            _prepared_files.pop(key, None)
+            return False
+        return identity == recorded
+
+
+def _record_prepared(path: str) -> None:
+    identity = _file_stat_identity(path)
+    if identity is None:
+        return
+    key = os.path.abspath(path)
+    with _prepare_lock:
+        if key not in _prepared_files and len(_prepared_files) >= _PREPARED_FILES_MAX:
+            # Bounded memory: evict the oldest entry (dicts keep insertion order).
+            _prepared_files.pop(next(iter(_prepared_files)), None)
+        _prepared_files[key] = identity
+
+
 def _prepare_video_for_delivery(
     path: str | None,
     *,
@@ -1212,13 +1275,24 @@ def _prepare_video_for_delivery(
     size limit) and keep the oversized file intact so the caller can split it
     into Telegram-friendly parts afterwards. ``cancel_check`` makes the optional
     faststart remux honour the 🛑 button.
+
+    Idempotent: a file that already passed the guard (recorded in
+    ``_prepared_files``) is returned immediately, so the engine-level
+    per-candidate verification and the public ``download_video`` chokepoint
+    never run the same expensive ``ffprobe`` + ``faststart`` remux twice on one
+    file.
     """
+    if not path:
+        return None
+    if _was_prepared(path):
+        return path
     path = _require_audio_or_none(path, source=source)
     if not path:
         return None
-    if allow_large:
-        return path
-    return _remux_mp4_faststart(path, cancel_check=cancel_check)
+    result = path if allow_large else _remux_mp4_faststart(path, cancel_check=cancel_check)
+    if result:
+        _record_prepared(result)
+    return result
 
 
 async def prepare_video_async(
