@@ -534,6 +534,22 @@ def _run_process_cancellable(cmd: list[str], check_size, timeout: int = 90) -> b
     return proc.returncode == 0
 
 
+def _rate_metrics(downloaded: int, total: int, elapsed_seconds: float) -> tuple[float, int]:
+    """Return (bytes_per_second, eta_seconds) for a direct CDN stream.
+
+    Previously direct downloads reported ``speed=0`` / ``eta=0``, which made
+    the progress line look frozen even when data was moving. ETA stays 0 when
+    the total size is unknown (no Content-Length) — the percentage is also
+    unknowable in that case and the UI switches to a size-only display.
+    """
+    elapsed = max(float(elapsed_seconds or 0.0), 0.001)
+    speed = float(downloaded) / elapsed
+    eta = 0
+    if total > downloaded > 0 and speed > 0:
+        eta = int((total - downloaded) / speed)
+    return speed, eta
+
+
 def _download_direct_sync(
     url: str,
     headers: dict | None = None,
@@ -612,6 +628,8 @@ def _download_direct_sync(
             raise FileTooLargeError(size_bytes=total, limit_bytes=MAX_FILE_SIZE_BYTES)
 
         downloaded = 0
+        start_ts = time.monotonic()
+        last_report_ts = 0.0
         with open(out, "wb") as output:
             for chunk in response.iter_content(chunk_size=256 * 1024):
                 if not chunk:
@@ -629,14 +647,21 @@ def _download_direct_sync(
                         return "skip"
                 output.write(chunk)
                 downloaded += len(chunk)
-                if progress and loop:
+                now = time.monotonic()
+                # Report roughly once a second (and once at the end for known
+                # sizes) instead of scheduling thousands of no-op coroutines.
+                if progress and loop and (
+                    (now - last_report_ts) >= 1.0 or (total and downloaded >= total)
+                ):
+                    last_report_ts = now
+                    speed, eta = _rate_metrics(downloaded, total, now - start_ts)
                     try:
                         asyncio.run_coroutine_threadsafe(progress({
                             "pct": int(downloaded * 100 / total) if total else 0,
                             "downloaded": downloaded,
                             "total": total,
-                            "speed": 0,
-                            "eta": 0,
+                            "speed": speed,
+                            "eta": eta,
                         }), loop)
                     except RuntimeError as exc:
                         logger.debug("Direct-download progress skipped: %s", exc)

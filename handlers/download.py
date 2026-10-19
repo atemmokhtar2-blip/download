@@ -71,6 +71,169 @@ async def _quiet_edit(edit_fn, *args, **kwargs):
         return None
 
 
+# An explicitly empty inline keyboard is what Telegram treats as "remove the
+# inline keyboard". Omitting reply_markup entirely would PRESERVE the 🛑 button
+# on terminal cards, letting a stale press reach the next download.
+EMPTY_MARKUP = InlineKeyboardMarkup([])
+
+
+async def _final_edit(edit_fn, text, **kwargs):
+    """Edit the action card into a terminal state and drop the 🛑 button.
+
+    Every terminal card (sent / cancelled / busy / too-large / failed) must
+    remove the cancel control so no stale 🛑 press can target the user's NEXT
+    download.
+    """
+    kwargs.setdefault("parse_mode", "HTML")
+    kwargs["reply_markup"] = EMPTY_MARKUP
+    return await _quiet_edit(edit_fn, text, **kwargs)
+
+
+# Telegram rejects edit floods; keep live progress updates at a human-readable
+# cadence while every phase transition stays instant (first edit after the
+# previous one passes unthrottled because the interval has already elapsed).
+_PROGRESS_MIN_INTERVAL = 1.8
+
+
+def _format_eta(seconds) -> str:
+    """Human ETA used in the progress line (e.g. "42s", "3:05", "1:02:03")."""
+    try:
+        seconds = int(seconds or 0)
+    except (TypeError, ValueError):
+        seconds = 0
+    if seconds <= 0:
+        return "—"
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, secs = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}:{secs:02d}"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}"
+
+
+class _ProgressUI:
+    """Owns the live status card while one download runs.
+
+    * The 🛑 button rides along on EVERY status edit — quiet mode or not — so
+      the user always has an escape hatch.
+    * Edits are throttled to ``_PROGRESS_MIN_INTERVAL`` because Telegram
+      rejects edit floods; the first event after a real gap is sent instantly.
+    * Phase transitions (preparing / queue / downloading / processing /
+      splitting / uploading / sent) are always shown. The fine-grained
+      percentage stream is optional (``show_progress``) and has no effect on
+      the cancel button or the phase messages.
+    * Progress events are parsed leniently because engines send different
+      shapes (dict with missing keys, a bare integer, pct=100 + total=1, or
+      ``total=0`` meaning "unknown size").
+    * Once ``end_download()`` runs, late progress events are dropped so a
+      queued ``pct=100`` can never overwrite the "uploading" message.
+    """
+
+    def __init__(self, message, edit_fn, cancel_markup, lang, user_id, *, show_progress=True):
+        self.message = message
+        self.edit_fn = edit_fn
+        self.cancel_markup = cancel_markup
+        self.lang = lang
+        self.user_id = user_id
+        self.show_progress = show_progress
+        self.phase = "start"  # start | download | post
+        self._finished = False
+        self._last_ts = 0.0
+        self._last_sig = None
+
+    def cancel_check(self):
+        """Called from yt-dlp hooks / chunk loops in worker threads."""
+        check_cancelled(self.user_id)
+
+    def start_download(self):
+        self.phase = "download"
+
+    def end_download(self):
+        self.phase = "post"
+
+    def finish(self):
+        self._finished = True
+
+    async def status(self, text, signature=None):
+        """Show an essential phase line (always includes the 🛑 button)."""
+        if self._finished:
+            return
+        now = time.monotonic()
+        sig = signature or text
+        if self._last_sig == sig and (now - self._last_ts) < _PROGRESS_MIN_INTERVAL:
+            return
+        self._last_ts = now
+        self._last_sig = sig
+        await _quiet_edit(self.edit_fn, text, parse_mode="HTML", reply_markup=self.cancel_markup)
+
+    @staticmethod
+    def _parse(prog):
+        """Normalize every progress shape the downloader layers may send."""
+        if isinstance(prog, dict):
+            def _num(value, default=0.0):
+                try:
+                    return float(value or 0)
+                except (TypeError, ValueError):
+                    return default
+
+            return {
+                "pct": _num(prog.get("pct", 0)),
+                "downloaded": max(0, int(_num(prog.get("downloaded", 0)))),
+                "total": max(0, int(_num(prog.get("total", 0)))),
+                "speed": max(0.0, _num(prog.get("speed", 0))),
+                "eta": max(0, int(_num(prog.get("eta", 0)))),
+            }
+        try:
+            return {"pct": float(prog or 0), "downloaded": 0, "total": 0, "speed": 0.0, "eta": 0}
+        except (TypeError, ValueError):
+            return None
+
+    async def __call__(self, prog):
+        """Progress event scheduled from a downloader worker thread."""
+        if self._finished or self.phase != "download" or not self.show_progress:
+            return
+        data = self._parse(prog)
+        if data is None:
+            return
+        pct = max(0.0, min(100.0, data["pct"]))
+        now = time.monotonic()
+        if (now - self._last_ts) < _PROGRESS_MIN_INTERVAL:
+            return
+
+        if data["total"] > 0 and int(pct) >= 100:
+            text = t(self.lang, "processing_after_download")
+            signature = "processing"
+        elif data["total"] > 0:
+            bar = make_progress_bar(pct)
+            speed_text = f"{format_size(int(data['speed']))}/s" if data["speed"] > 0 else "—"
+            text = t(
+                self.lang, "downloading",
+                bar=bar, percent=int(pct),
+                downloaded=format_size(data["downloaded"]),
+                total=format_size(data["total"]),
+                speed=speed_text,
+                eta=_format_eta(data["eta"]),
+            )
+            signature = f"dl:{int(pct)}"
+        else:
+            # Content-Length absent: percentage is unknowable — show real bytes
+            # downloaded and the current speed, and never fake a % bar.
+            speed_text = f"{format_size(int(data['speed']))}/s" if data["speed"] > 0 else "—"
+            text = t(
+                self.lang, "downloading_unknown_total",
+                downloaded=format_size(data["downloaded"]),
+                speed=speed_text,
+            )
+            signature = f"dl-unknown:{data['downloaded'] // (64 * 1024)}"
+
+        if signature == self._last_sig:
+            return
+        self._last_ts = now
+        self._last_sig = signature
+        await _quiet_edit(self.edit_fn, text, parse_mode="HTML", reply_markup=self.cancel_markup)
+
+
 def _safe_store(fn, *args, **kwargs):
     """Run post-send bookkeeping (cache/DB stats) without failing the download.
 
@@ -640,10 +803,20 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # loop (yt-dlp hook, CDN chunk loop, fallback matrix, album items)
         # aborts at its next checkpoint. The running task then edits the card
         # to the final "download cancelled" message and cleans temp files.
+        #
+        # A stale press on a card that already finished must NOT resurrect the
+        # cancel flag for the user's NEXT download, so it is rejected here
+        # while the per-user lock is free. Repeated presses while the stop is
+        # being processed just answer "already stopping" without re-editing.
+        if not is_user_busy(user.id):
+            await query.answer(t(lang, "no_active_download"), show_alert=True)
+            return
+        already_flagged = is_cancel_requested(user.id)
         request_cancel(user.id)
-        await query.answer(t(lang, "cancelling"))
-        edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
-        await _quiet_edit(edit_fn, t(lang, "cancelling"), parse_mode="HTML")
+        await query.answer(t(lang, "already_cancelling") if already_flagged else t(lang, "cancelling"))
+        if not already_flagged:
+            edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
+            await _quiet_edit(edit_fn, t(lang, "cancelling"), parse_mode="HTML")
         return
 
     if token:
@@ -819,8 +992,6 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = None
     edit_fn = query.edit_message_caption if progress_msg.caption else progress_msg.edit_text
 
-    quiet = bool(settings.get("quiet_mode")) or not bool(settings.get("notify_progress", 1))
-
     # 🛑 Cancel support: a cancel button rides along on every status edit while
     # the download runs; pressing it sets the per-user cancel flag that every
     # download loop checks (yt-dlp progress hook, CDN chunk loop, fallback
@@ -829,63 +1000,40 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [inline_button(t(lang, "cancel_download_button"), callback_data="dl_stop")]
     ])
     clear_cancel(user.id)
-    if not quiet:
-        await _quiet_edit(edit_fn, t(lang, "preparing_download"), parse_mode="HTML", reply_markup=cancel_markup)
 
-    # Global concurrency gate — wait for a free slot (do not overwhelm server)
-    if bool(settings.get("notify_queue", 1)) and not quiet:
+    # Live % updates honour the two "quiet" toggles; essential phase lines and
+    # the 🛑 button do NOT — quiet mode must never remove the cancel control.
+    show_progress = bool(settings.get("notify_progress", 1)) and not bool(settings.get("quiet_mode"))
+    ui = _ProgressUI(progress_msg, edit_fn, cancel_markup, lang, user.id, show_progress=show_progress)
+
+    # Distinct phase: preparing the download — shown even in quiet mode so the
+    # user knows the job is alive and can cancel it.
+    await ui.status(t(lang, "preparing_download"))
+
+    # Global concurrency gate — distinct queue-wait phase, also always shown
+    # (with 🛑) because waiting for a slot must not trap the user.
+    if bool(settings.get("notify_queue", 1)):
         try:
             in_use, max_slots = active_global_slots()
             if in_use >= max_slots:
-                await _quiet_edit(edit_fn, t(lang, "queue_wait", current=in_use, maximum=max_slots), parse_mode="HTML", reply_markup=cancel_markup)
+                await ui.status(t(lang, "queue_wait", current=in_use, maximum=max_slots))
         except Exception:
             pass
-
-    progress_state = {"last_ts": 0.0, "last_pct": -1}
-
-    async def update_progress(prog):
-        try:
-            if is_cancel_requested(user.id):
-                return
-            if isinstance(prog, dict):
-                pct, dl, tot, spd, eta = prog.get("pct", 0), prog.get("downloaded", 0), prog.get("total", 0), prog.get("speed", 0), prog.get("eta", 0)
-            else:
-                pct, dl, tot, spd, eta = prog, 0, 0, 0, 0
-            now = time.monotonic()
-            if pct < 100 and (now - progress_state["last_ts"] < 2) and abs(int(pct) - int(progress_state["last_pct"])) < 8:
-                return
-            progress_state["last_ts"] = now
-            progress_state["last_pct"] = int(pct)
-            bar = make_progress_bar(pct)
-            txt = t(lang, "downloading", bar=bar, percent=pct, downloaded=format_size(dl), total=format_size(tot), speed=f"{format_size(int(spd))}/s", eta=f"{int(eta)}s")
-            if progress_msg.caption:
-                await progress_msg.edit_caption(txt, parse_mode="HTML", reply_markup=cancel_markup)
-            else:
-                await progress_msg.edit_text(txt, parse_mode="HTML", reply_markup=cancel_markup)
-        except Exception:
-            pass
-
-    async def _noop_progress(prog):
-        pass
-    if quiet:
-        update_progress = _noop_progress
-
-    # The downloader reads this attribute synchronously inside worker threads
-    # (yt-dlp hooks, requests chunk loops) and raises DownloadCancelledError,
-    # which aborts the in-thread download immediately.
-    update_progress.cancel_check = lambda: check_cancelled(user.id)
 
     try:
         async with download_slot(timeout=180):
             await _run_download(query, context, info, user, lang, quality_label,
-                                is_audio, is_image, is_album, edit_fn, update_progress,
+                                is_audio, is_image, is_album, ui,
                                 audio_bitrate=audio_bitrate, delivery_mode=delivery_mode,
                                 settings=settings)
+        # Delivery finished: confirm on the status card and drop the 🛑 button
+        # so a stale press can never flag the NEXT download.
+        await _final_edit(edit_fn, t(lang, "sent"))
     except DownloadCancelledError:
         logger.info("Download cancelled by user=%s url=%s", user.id, str(info.get("url", ""))[:120])
-        await _quiet_edit(edit_fn, t(lang, "download_cancelled"), parse_mode="HTML")
+        await _final_edit(edit_fn, t(lang, "download_cancelled"))
     except asyncio.TimeoutError:
-        await _quiet_edit(edit_fn, t(lang, "server_busy"))
+        await _final_edit(edit_fn, t(lang, "server_busy"))
     except FileTooLargeError as exc:
         # Report the limit that ACTUALLY rejected the file: the user's
         # personal max_file_size_mb (from Settings) or Telegram's global cap.
@@ -895,14 +1043,13 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_limit_bytes = user_max * 1024 * 1024 if user_max > 0 else 0
         if exc.limit_bytes and user_limit_bytes and exc.limit_bytes == user_limit_bytes:
             limit_text = format_size(exc.limit_bytes)
-            await _quiet_edit(
+            await _final_edit(
                 edit_fn,
                 t(lang, "file_too_large_user", max_size=limit_text),
-                parse_mode="HTML",
             )
         else:
             limit_bytes = exc.limit_bytes or MAX_FILE_SIZE_MB * 1024 * 1024
-            await _quiet_edit(
+            await _final_edit(
                 edit_fn,
                 t(lang, "file_too_large", max_size=format_size(limit_bytes)),
             )
@@ -926,7 +1073,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            platform=str(info.get("platform") or ""))
         try:
             if empty_cdn:
-                await _quiet_edit(edit_fn, t(lang, "cdn_rejected"), parse_mode="HTML")
+                await _final_edit(edit_fn, t(lang, "cdn_rejected"))
             elif yt_blocked:
                 if bot_check:
                     msg = (
@@ -941,16 +1088,17 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "🛡 <b>الصيغة المطلوبة غير متاحة لهذا الفيديو.</b>\n"
                         "جرّب جودة أقل أو رابطًا آخر."
                     )
-                await _quiet_edit(edit_fn, msg, parse_mode="HTML")
+                await _final_edit(edit_fn, msg)
             else:
-                await _quiet_edit(edit_fn, t(lang, "download_failed"))
+                await _final_edit(edit_fn, t(lang, "download_failed"))
         except Exception:
             # Never let a failed status edit mask the original download error.
             try:
-                await _quiet_edit(edit_fn, t(lang, "download_failed"))
+                await _final_edit(edit_fn, t(lang, "download_failed"))
             except Exception:
                 pass
     finally:
+        ui.finish()
         release_user_download(user.id)
         clear_cancel(user.id)
         if file_path and os.path.exists(file_path):
@@ -958,22 +1106,16 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _run_download(query, context, info, user, lang, quality_label,
-                        is_audio, is_image, is_album, edit_fn, update_progress,
+                        is_audio, is_image, is_album, ui,
                         audio_bitrate: str | None = None, delivery_mode: str = "video",
                         settings: dict | None = None):
     file_path = None
     complete_caption = _completion_caption(lang, settings)
-    quiet = bool((settings or {}).get("quiet_mode"))
-
-    async def _status(text, **kwargs):
-        """Edit the action card with a status line, unless quiet mode is on."""
-        if quiet:
-            return
-        await _quiet_edit(edit_fn, text, **kwargs)
 
     try:
         title = info.get("title", "Unknown")
         platform = info.get("platform", "")
+        ui.start_download()
 
         if is_album:
             items = info.get("album_items") or []
@@ -985,21 +1127,26 @@ async def _run_download(query, context, info, user, lang, quality_label,
                     idx = prog.get("album_index", 0)
                     tot = prog.get("album_total", len(items))
                     txt = t(lang, "album_downloading", current=idx, total=tot)
-                    await _status(txt, parse_mode="HTML")
+                    await ui.status(txt, signature=f"album:{idx}")
                 except Exception:
                     pass
 
-            await _status(t(lang, "preparing_download"), parse_mode="HTML")
+            # Albums download item-by-item; give the item loop the same 🛑
+            # semantics as the single-file paths.
+            album_progress.cancel_check = ui.cancel_check
+
+            await ui.status(t(lang, "preparing_download"), signature="preparing-album")
             downloaded = await download_album(items, album_progress)
+            ui.end_download()
             if not downloaded:
                 raise Exception("Album download failed")
 
             for _item in downloaded:
                 _enforce_user_size(_item.get("path"), settings)
 
-            await _status(
+            await ui.status(
                 t(lang, "album_uploading", count=len(downloaded)),
-                parse_mode="HTML",
+                signature="album-uploading",
             )
 
             # Telegram media groups require 2–10 items. Single item → normal send.
@@ -1096,11 +1243,12 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 file_path = None
 
         elif is_image:
-            await _status(t(lang, "preparing_download"), parse_mode="HTML")
+            await ui.status(t(lang, "preparing_download"), signature="preparing-image")
             file_path = await download_image(info["url"], info.get("image_url"))
+            ui.end_download()
             if not file_path: raise Exception("Download failed")
             _enforce_user_size(file_path, settings)
-            await _status(t(lang, "uploading"), parse_mode="HTML")
+            await ui.status(t(lang, "uploading"), signature="uploading-image")
             safe_title = _safe_upload_name(title)
 
             async def _send_photo():
@@ -1123,12 +1271,13 @@ async def _run_download(query, context, info, user, lang, quality_label,
             )
 
         elif is_audio:
-            await _status(t(lang, "preparing_audio"), parse_mode="HTML")
-            file_path = await download_audio(info["url"], update_progress, bitrate=audio_bitrate)
+            await ui.status(t(lang, "preparing_audio"), signature="preparing-audio")
+            file_path = await download_audio(info["url"], ui, bitrate=audio_bitrate)
+            ui.end_download()
             if not file_path: raise Exception("Download failed")
             check_cancelled(user.id)
             _enforce_user_size(file_path, settings)
-            await _status(t(lang, "uploading"), parse_mode="HTML")
+            await ui.status(t(lang, "uploading"), signature="uploading-audio")
             safe_title = _safe_upload_name(title)
 
             async def _send_audio():
@@ -1161,23 +1310,24 @@ async def _run_download(query, context, info, user, lang, quality_label,
             if str(quality_label).lower() in ("best", "best_quality"):
                 format_id = "best"
 
-            await _status(t(lang, "preparing_download"), parse_mode="HTML")
+            await ui.status(t(lang, "preparing_download"), signature="preparing-video")
 
             # Allow oversized files so they can be split into Telegram-friendly
             # parts instead of being deleted mid-download.
             allow_large = AUTO_SPLIT_LARGE_VIDEOS
             file_path = await download_video(
-                info["url"], format_id, quality_label, update_progress,
+                info["url"], format_id, quality_label, ui,
                 play_url=info.get("play_url"),
                 allow_large=allow_large,
             )
+            ui.end_download()
             if not file_path:
                 raise Exception("Download failed")
 
             _enforce_user_size(file_path, settings)
 
             if AUTO_SPLIT_LARGE_VIDEOS and os.path.getsize(file_path) > MAX_FILE_SIZE_BYTES:
-                await _status(t(lang, "splitting_video"), parse_mode="HTML")
+                await ui.status(t(lang, "splitting_video"), signature="splitting-video")
                 parts = split_video_parts(file_path, MAX_FILE_SIZE_BYTES)
                 if not parts:
                     raise FileTooLargeError(os.path.getsize(file_path), MAX_FILE_SIZE_BYTES)
@@ -1216,7 +1366,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                         if part and part != file_path and os.path.exists(part):
                             _cleanup_file(part)
             else:
-                await _status(t(lang, "uploading"), parse_mode="HTML")
+                await ui.status(t(lang, "uploading"), signature="uploading-video")
                 safe_title = _safe_upload_name(title)
 
                 async def _send_video():
