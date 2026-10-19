@@ -858,6 +858,55 @@ def _download_hls_native(play_url: str, prefix: str, headers: dict | None, timeo
         return None
 
 
+def _ffmpeg_hls_single(
+    ffmpeg: str,
+    media_url: str,
+    out_path: str,
+    effective_headers: dict,
+    timeout: int,
+) -> str | None:
+    """Download ONE concrete HLS media URL into ``out_path`` via ffmpeg.
+
+    Two passes — a stream-copy remux (fast/lossless) then a full H.264/AAC
+    re-encode — sharing the fast/resilient flag set. Extracted so the
+    master-playlist resolver and the legacy raw-URL fallback use the exact same
+    code path. Returns ``out_path`` on success, or None after both passes fail.
+    """
+    header_args = ["-headers", "\r\n".join(
+        f"{k}: {v}" for k, v in (effective_headers or {}).items() if k and v
+    )]
+    passes = (
+        ["-c:v", "copy", "-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart"],
+        ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"],
+    )
+    for pass_args in passes:
+        _safe_remove(out_path)
+        try:
+            with _ffmpeg_sem:
+                proc = subprocess.run(
+                    [
+                        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                        *header_args,
+                        *_HLS_FFMPEG_FAST_FLAGS,
+                        "-i", media_url,
+                        *pass_args,
+                        out_path,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+            if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) >= 2048:
+                return out_path
+            logger.debug("HLS download pass failed for %s: %s", str(media_url)[:120], (proc.stderr or "")[-300:])
+        except Exception as exc:
+            logger.debug("HLS download pass crashed for %s: %s", str(media_url)[:120], exc)
+    _safe_remove(out_path)
+    return None
+
+
 def download_hls_mp4(play_url: str, prefix: str = "xdl-hls", headers: dict | None = None, timeout: int = 420) -> str | None:
     """Download an HLS (.m3u8) stream into a faststart MP4 via ffmpeg.
 
@@ -899,52 +948,36 @@ def download_hls_mp4(play_url: str, prefix: str = "xdl-hls", headers: dict | Non
     effective_headers = tls.browser_headers()
     if headers:
         effective_headers.update(headers)
-    header_args = ["-headers", "\r\n".join(f"{k}: {v}" for k, v in effective_headers.items() if k and v)]
 
-    passes = (
-        [
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-bsf:a", "aac_adtstoasc",
-            "-movflags", "+faststart",
-        ],
-        [
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "23",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-movflags", "+faststart",
-        ],
-    )
+    # Master-playlist resolution (the silent-video fix). If the URL is a variant
+    # playlist, resolve it into concrete media URLs that actually carry audio.
+    # Otherwise ffmpeg picks one rendition on its own — frequently the
+    # highest-bandwidth VIDEO-ONLY variant — and the central audio guard rejects
+    # a silent file that a perfectly-good muxed rendition could have avoided.
+    from services import hls as hlsmod
 
-    for pass_args in passes:
-        _safe_remove(out_path)
-        try:
-            with _ffmpeg_sem:
-                proc = subprocess.run(
-                    [
-                        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                        *header_args,
-                        *_HLS_FFMPEG_FAST_FLAGS,
-                        "-i", play_url,
-                        *pass_args,
-                        out_path,
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=timeout,
-                    check=False,
-                )
-            if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) >= 2048:
-                return out_path
-            logger.debug("HLS download pass failed for %s: %s", str(play_url)[:120], proc.stderr[-300:])
-        except Exception as exc:
-            logger.debug("HLS download pass crashed for %s: %s", str(play_url)[:120], exc)
+    plans = hlsmod.resolve_hls_targets(play_url, headers=headers, timeout=min(timeout, 60))
+    for plan in plans:
+        if plan.kind == "split" and plan.video_uri and plan.audio_uri:
+            merged = merge_hls_video_audio(
+                plan.video_uri,
+                plan.audio_uri,
+                prefix=prefix,
+                headers=headers,
+                timeout=timeout,
+            )
+            if merged:
+                return merged
+            continue
+        if plan.video_uri:
+            result = _ffmpeg_hls_single(ffmpeg, plan.video_uri, out_path, effective_headers, timeout)
+            if result:
+                return result
 
-    _safe_remove(out_path)
-    return None
+    # Legacy raw-URL fallback (unchanged for plain media playlists, or when the
+    # resolver could not fetch/parse the playlist): feed the original URL to
+    # ffmpeg through the same shared passes.
+    return _ffmpeg_hls_single(ffmpeg, play_url, out_path, effective_headers, timeout)
 
 
 def merge_hls_video_audio(
@@ -982,10 +1015,14 @@ def merge_hls_video_audio(
     os.close(fd)
     _safe_remove(out_path)
 
-    header_args: list[str] = []
+    # Same browser-grade header suite as the single-input HLS path: ffmpeg must
+    # not fall back to its own Lavf UA when fetching the two renderings'
+    # playlists + segments, or bot-gated HLS CDNs reject the merge outright.
+    effective_headers = tls.browser_headers()
     if headers:
-        header_args = ["-headers", "\r\n".join(
-            f"{k}: {v}" for k, v in headers.items() if k and v)]
+        effective_headers.update(headers)
+    header_args = ["-headers", "\r\n".join(
+        f"{k}: {v}" for k, v in effective_headers.items() if k and v)]
 
     def _inputs() -> list[str]:
         args: list[str] = []
