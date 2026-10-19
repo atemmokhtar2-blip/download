@@ -21,6 +21,18 @@ MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "300"))
+# Fast-fail socket/read timeout for EACH individual network operation. A dead
+# or stalled connection now aborts in ~60s (then yt-dlp retries) instead of
+# blocking a whole download slot for DOWNLOAD_TIMEOUT seconds.
+DOWNLOAD_SOCKET_TIMEOUT = min(int(os.getenv("DOWNLOAD_SOCKET_TIMEOUT", "60")), DOWNLOAD_TIMEOUT)
+# yt-dlp advanced throughput knobs:
+#  - MAX_FRAGMENT_CONCURRENCY: parallel DASH/HLS fragment fetches (higher =
+#    faster on modern CDNs; 8 keeps per-IP rate-limit risk low).
+#  - HTTP_CHUNK_SIZE_MB: largest single HTTP read chunk for progressive files.
+#  - ALBUM_CONCURRENCY: how many album/carousel/gallery items download at once.
+MAX_FRAGMENT_CONCURRENCY = max(2, min(int(os.getenv("MAX_FRAGMENT_CONCURRENCY", "8")), 16))
+HTTP_CHUNK_SIZE_MB = max(1, min(int(os.getenv("HTTP_CHUNK_SIZE_MB", "16")), 64))
+ALBUM_CONCURRENCY = max(1, min(int(os.getenv("ALBUM_CONCURRENCY", "3")), 6))
 # Moving-window cooldown: RATE_LIMIT_BURST hits allowed per RATE_LIMIT_SECONDS.
 RATE_LIMIT_SECONDS = int(os.getenv("RATE_LIMIT_SECONDS", "15"))
 RATE_LIMIT_BURST = int(os.getenv("RATE_LIMIT_BURST", "2"))
