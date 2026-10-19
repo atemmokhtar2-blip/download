@@ -218,11 +218,35 @@ def _platform(url: str) -> str:
     return host or "Generic"
 
 
+# Fallback ONLY — the authoritative list is read dynamically from the installed
+# yt-dlp build (INNERTUBE_CLIENTS). Values here mirror yt-dlp 2025.10.14 and are
+# only used if the runtime inspection is somehow unavailable.
 YOUTUBE_PLAYER_CLIENTS = {
-    "android", "android_music", "ios", "ios_music", "web", "mweb",
-    "tv", "tv_embedded", "web_creator", "web_embedded", "web_music",
-    "web_safari", "mediaconnect",
+    "android", "android_vr", "ios", "mweb",
+    "tv", "tv_embedded", "tv_simply", "web",
+    "web_creator", "web_embedded", "web_music", "web_safari",
 }
+
+
+def _available_youtube_clients() -> frozenset:
+    """Player-client names supported by the INSTALLED yt-dlp build.
+
+    Reads ``INNERTUBE_CLIENTS`` from the running library instead of trusting a
+    frozen list, so the engine can NEVER pass stale clients an older hardcoded
+    set would (``mediaconnect`` / ``ios_music`` / ``android_music`` were all
+    dropped from recent yt-dlp), and automatically picks up newly added ones
+    (``android_vr`` / ``tv_simply``) after the next yt-dlp upgrade — no code
+    change needed. This is the same self-describing-config pattern modern
+    download managers use to survive extractor churn.
+    """
+    try:
+        from yt_dlp.extractor.youtube._base import INNERTUBE_CLIENTS
+        names = frozenset(k for k in INNERTUBE_CLIENTS if not str(k).startswith("_"))
+        if names:
+            return names
+    except Exception as exc:  # pragma: no cover - version drift only
+        logger.debug("youtube client inspection failed: %s", exc)
+    return frozenset(YOUTUBE_PLAYER_CLIENTS)
 
 
 def _safe_youtube_clients() -> list[str]:
@@ -234,16 +258,17 @@ def _safe_youtube_clients() -> list[str]:
     later as bot-check-immune fallbacks — they only serve weak 360p-ish
     formats, so leading with them was collapsing the engine to weak quality.
     """
+    available = _available_youtube_clients()
     candidates = [
-        "ios", "android", "tv", "tv_embedded",
+        "ios", "android", "tv", "tv_embedded", "tv_simply",
         YTDLP_CLIENT,
-        "web_embedded", "web_creator", "web_safari",
-        "web_music", "mediaconnect", "mweb", "web",
+        "web_creator", "web_safari", "web_music", "mweb", "web",
+        "web_embedded", "android_vr",
     ]
     out: list[str] = []
     for raw in candidates:
         item = str(raw or "").strip()
-        if item in YOUTUBE_PLAYER_CLIENTS and item not in out:
+        if item in available and item not in out:
             out.append(item)
     return out or ["ios", "android", "tv"]
 
@@ -283,6 +308,7 @@ def _youtube_client_profiles() -> list[tuple[str, list[str]]]:
     behaviour of burning dozens of attempts on weak web/android clients.
     """
     preferred = _safe_youtube_clients()
+    available = _available_youtube_clients()
     profiles: list[tuple[str, list[str]]] = [
         ("default", preferred[:4]),
         ("tv-embedded", ["tv_embedded", "tv"]),
@@ -290,14 +316,14 @@ def _youtube_client_profiles() -> list[tuple[str, list[str]]]:
         ("android", ["android"]),
         ("web-embedded", ["web_embedded"]),
         ("embedded", ["web_embedded", "tv_embedded"]),
-        ("music", ["ios_music", "android_music", "web_music", "mediaconnect"]),
-        ("mediaconnect", ["mediaconnect"]),
-        ("full", [c for c in preferred if c in YOUTUBE_PLAYER_CLIENTS][:8]),
+        ("music", ["web_music", "mweb"]),
+        ("tv-simply", ["tv_simply", "tv_embedded"]),
+        ("full", [c for c in preferred if c in available][:8]),
     ]
     seen: set[tuple[str, ...]] = set()
     out: list[tuple[str, list[str]]] = []
     for name, clients in profiles:
-        filtered = [c for c in clients if c in YOUTUBE_PLAYER_CLIENTS]
+        filtered = [c for c in clients if c in available]
         key = tuple(filtered)
         if filtered and key not in seen:
             seen.add(key)
