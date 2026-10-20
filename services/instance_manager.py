@@ -22,7 +22,7 @@ import logging
 
 from telegram.ext import Application
 
-from config.settings import ENABLE_CLONE_INSTANCES
+from config.settings import ENABLE_CLONE_INSTANCES, BOT_SECRETS_KEY
 from services import referral
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,14 @@ async def spawn_instance(instance: dict) -> bool:
 async def start_active_instances() -> None:
     """Boot every active clone after the main bot is up (called from post_init)."""
     if not ENABLE_CLONE_INSTANCES:
+        logger.warning("Clone bootstrap is disabled (ENABLE_CLONE_INSTANCES=0).")
         return
+    if not BOT_SECRETS_KEY:
+        logger.warning(
+            "BOT_SECRETS_KEY is not set. Clone-token encryption is derived from "
+            "the main bot token; clones will not decrypt after that token changes. "
+            "Configure one stable secret on every host sharing the same PostgreSQL DB."
+        )
     # Give the main bot a moment to settle before adding pollers.
     await asyncio.sleep(5)
     try:
