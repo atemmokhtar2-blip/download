@@ -269,9 +269,17 @@ async def subscription_check_callback(update, context: ContextTypes.DEFAULT_TYPE
     if is_clone_bot(getattr(getattr(context, "bot", None), "username", None)):
         await query.answer("✅ لا يوجد اشتراك إجباري في هذه النسخة.")
         return
+    from database import subscription as db
     channels = _active_global_channels()
+    if not db.subscription_enabled():
+        await query.answer("لا يوجد اشتراك إجباري مفعل.")
+        return
     if not channels:
-        await query.answer("✅ لا يوجد اشتراك إجباري مفعل.")
+        await query.answer(
+            "الاشتراك الإجباري مفعّل لكن إعدادات القنوات غير مكتملة. "
+            "تم إيقاف الاستخدام مؤقتًا.",
+            show_alert=True,
+        )
         return
 
     missing, errored = await _verify(context.bot, user.id, channels)
