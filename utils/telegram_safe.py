@@ -49,3 +49,25 @@ async def safe_edit(edit_callable, *args, **kwargs):
             logger.debug("Ignored benign Telegram edit error: %s", exc)
             return None
         raise
+
+
+async def safe_answer(query, *args, **kwargs):
+    """Answer a Telegram callback without crashing on an expired callback ID.
+
+    Telegram callback IDs are short-lived. If an update is delivered late, the
+    answer can fail even though the callback's requested UI action can still be
+    handled. Treat only expired/invalid callback IDs as benign; propagate other
+    Telegram errors so genuine failures remain observable.
+    """
+    try:
+        return await query.answer(*args, **kwargs)
+    except BadRequest as exc:
+        msg = str(exc).lower()
+        if (
+            "query is too old" in msg
+            or "response timeout expired" in msg
+            or "query id is invalid" in msg
+        ):
+            logger.info("Ignored expired Telegram callback answer: %s", exc)
+            return None
+        raise
