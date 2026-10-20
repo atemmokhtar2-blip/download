@@ -736,7 +736,7 @@ async def _show_activity(q) -> None:
         lines = []
         for it in items:
             action = _ACTION_LABELS_AR.get(it.get("action"), it.get("action") or "عملية")
-            created = (it.get("created_at") or "—")[:16]
+            created = str(it.get("created_at") or "—")[:16]
             lines.append(f"• <b>{action}</b> — <code>{created}</code>")
         body = "\n".join(lines)
     await _edit_ref(
