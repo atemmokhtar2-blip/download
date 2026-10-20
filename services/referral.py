@@ -705,6 +705,7 @@ def delete_instance_hard(instance_id: int) -> dict[str, int]:
         "clone_bans",
         "clone_admins",
         "clone_settings",
+        "clone_users",       # per-instance user membership
         "bot_secrets",       # encrypted token + hash — the clone's identity
         "activation_log",
         "redemption_log",
