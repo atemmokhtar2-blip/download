@@ -45,6 +45,11 @@ async def cleanup_old_history():
                 import logging
                 logging.getLogger(__name__).info(
                     "Pruned %s clone history rows (plan retention)", removed_clones)
+            orphan_memberships = plan_policy.purge_orphan_clone_users()
+            if orphan_memberships:
+                import logging
+                logging.getLogger(__name__).info(
+                    "Pruned %s orphan clone memberships", orphan_memberships)
         except Exception:
             import logging
             logging.getLogger(__name__).exception("clone history retention sweep failed")
