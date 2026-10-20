@@ -146,23 +146,32 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("clone start gate failed uid=%s", user.id)
 
-    await update.message.reply_text(
-        t("ar", "welcome_back") + ref_note,
-        parse_mode="HTML",
-        reply_markup=build_main_keyboard(context, user.id),
-    )
-
-    # A Pro clone can show its OWN welcome message (set from its admin panel).
+    # Resolve a clone's custom welcome BEFORE sending anything so the
+    # default welcome is not sent as a duplicate. When the owner has set
+    # custom text, that text is the only welcome content shown; otherwise
+    # retain the normal welcome. The permanent keyboard is attached either way.
+    custom_welcome = ""
     try:
         if is_clone_bot(context.bot.username or ""):
             from services import plan_policy
             pctx = plan_policy.plan_context(context.bot)
             if pctx.get("instance_id"):
-                custom = plan_policy.get_clone_setting(pctx["instance_id"], "welcome_text", "")
-                if custom:
-                    await update.message.reply_text(custom[:1500])
+                custom_welcome = (
+                    plan_policy.get_clone_setting(
+                        pctx["instance_id"], "welcome_text", ""
+                    ) or ""
+                ).strip()
     except Exception:
-        logger.debug("clone custom welcome failed", exc_info=True)
+        logger.debug("clone custom welcome lookup failed", exc_info=True)
+
+    welcome_text = custom_welcome[:1500] if custom_welcome else (
+        t("ar", "welcome_back") + ref_note
+    )
+    await update.message.reply_text(
+        welcome_text,
+        parse_mode="HTML" if not custom_welcome else None,
+        reply_markup=build_main_keyboard(context, user.id),
+    )
 
     # Inside a clone instance, new users always see the way back to the
     # main bot (sent once per process session so it never becomes spam).
