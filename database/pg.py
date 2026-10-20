@@ -472,5 +472,21 @@ def ensure_clone_users_migration() -> None:
             ON CONFLICT (instance_id, telegram_id) DO NOTHING
             """
         )
+        # Recover members whose previous source stayed "main" but whose
+        # download history proves they used a specific clone instance.
+        execute(
+            """
+            INSERT INTO clone_users
+                (instance_id, telegram_id, username, first_name, registered_at, last_active_at)
+            SELECT d.instance_id, ru.telegram_id, ru.username, ru.first_name,
+                   MIN(d.created_at), MAX(d.created_at)
+            FROM downloads d
+            JOIN ref_users ru ON ru.telegram_id = d.user_id
+            JOIN bot_instances bi ON bi.id = d.instance_id
+            WHERE d.instance_id > 0
+            GROUP BY d.instance_id, ru.telegram_id, ru.username, ru.first_name
+            ON CONFLICT (instance_id, telegram_id) DO NOTHING
+            """
+        )
     except Exception:
         logger.exception("clone users legacy membership migration failed")
