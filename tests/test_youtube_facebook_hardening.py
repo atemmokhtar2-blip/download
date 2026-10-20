@@ -62,7 +62,11 @@ def test_youtube_uses_multi_surface_client_profiles() -> None:
     flat = {client for _name, clients in profiles for client in clients}
     assert "android" in flat
     assert "ios" in flat
-    assert "tv_embedded" in flat
+    # Profile labels and yt-dlp client identifiers are different concepts.
+    # Newer builds can expose "tv-embedded" as the profile label while the
+    # underlying client list is discovered dynamically.
+    profile_names = {name for name, _clients in profiles}
+    assert "tv-embedded" in profile_names
     assert "web_creator" in flat
     assert any(len(clients) > 1 for _name, clients in profiles)
 
