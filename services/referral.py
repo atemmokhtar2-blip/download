@@ -262,17 +262,16 @@ def register_user(tg_user, is_new: bool, source: str = "main") -> None:
                     INSERT INTO clone_users
                         (instance_id, telegram_id, username, first_name,
                          registered_at, last_active_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     ON CONFLICT (instance_id, telegram_id) DO UPDATE SET
                         username = EXCLUDED.username,
                         first_name = EXCLUDED.first_name,
-                        last_active_at = EXCLUDED.last_active_at
+                        last_active_at = CURRENT_TIMESTAMP
                     """,
                     (
                         int(instance["id"]), uid,
                         (tg_user.username or "")[:64],
                         (tg_user.first_name or "")[:64],
-                        now_iso,
                     ),
                 )
         except Exception:
