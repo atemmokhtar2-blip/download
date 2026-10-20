@@ -870,6 +870,18 @@ def clone_user_detail(inst: dict, user_id: int) -> dict:
     }
 
 
+def purge_orphan_clone_users() -> int:
+    """Delete memberships only when their owning clone record was permanently removed."""
+    try:
+        return int(pg.execute(
+            "DELETE FROM clone_users cu WHERE NOT EXISTS "
+            "(SELECT 1 FROM bot_instances bi WHERE bi.id = cu.instance_id)"
+        ) or 0)
+    except Exception:
+        logger.exception("orphan clone membership cleanup failed")
+        return 0
+
+
 def clone_today_summary(inst: dict) -> dict:
     inst_id = int((inst or {}).get("id") or 0)
     return {
