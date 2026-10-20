@@ -246,6 +246,38 @@ def register_user(tg_user, is_new: bool, source: str = "main") -> None:
             "UPDATE ref_users SET last_active_at = ?, activity_days = ?, username = ?, first_name = ? WHERE telegram_id = ?",
             (now_iso, days_str, (tg_user.username or "")[:64], (tg_user.first_name or "")[:64], uid),
         )
+    # Track clone membership independently from the global referral mirror.
+    # Never overwrite ref_users.source when an existing user visits another bot:
+    # one account can belong to the main bot and multiple private clones.
+    if str(source or "").startswith("clone:"):
+        try:
+            bot_id = int(str(source).split(":", 1)[1])
+            instance = pg.fetchone(
+                "SELECT id FROM bot_instances WHERE bot_id = ? AND status = 'active'",
+                (bot_id,),
+            )
+            if instance and int(instance.get("id") or 0) > 0:
+                pg.execute(
+                    """
+                    INSERT INTO clone_users
+                        (instance_id, telegram_id, username, first_name,
+                         registered_at, last_active_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    ON CONFLICT (instance_id, telegram_id) DO UPDATE SET
+                        username = EXCLUDED.username,
+                        first_name = EXCLUDED.first_name,
+                        last_active_at = EXCLUDED.last_active_at
+                    """,
+                    (
+                        int(instance["id"]), uid,
+                        (tg_user.username or "")[:64],
+                        (tg_user.first_name or "")[:64],
+                        now_iso,
+                    ),
+                )
+        except Exception:
+            logger.exception("clone membership registration failed uid=%s source=%s", uid, source)
+
     if not is_new:
         # Returning user: 2 distinct activity days can qualify a pending referral.
         _maybe_qualify_by_activity(uid)
