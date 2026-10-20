@@ -9,8 +9,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from telegram import Update
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    InlineQueryHandler, filters
+    Application, ApplicationHandlerStop, CommandHandler, MessageHandler,
+    CallbackQueryHandler, InlineQueryHandler, TypeHandler, filters
 )
 
 from config.settings import BOT_TOKEN
@@ -66,6 +66,60 @@ async def unknown_callback(update: Update, context):
     user_id = query.from_user.id if query.from_user else "unknown"
     system_logger.warning("Unknown callback received: user=%s data=%r", user_id, data)
     await query.answer("انتهت صلاحية الجلسة. استخدم /start مرة أخرى.", show_alert=True)
+
+
+async def forced_subscription_guard(update: Update, context):
+    """Global fail-closed gate before every command, callback, text and inline query.
+
+    The only non-admin interaction allowed through while unsubscribed is the
+    explicit subscription-check callback. The guard runs in group -1 and stops
+    handler dispatch when verification fails, so individual handlers cannot
+    accidentally bypass the subscription requirement.
+    """
+    user = update.effective_user
+    if user is None:
+        return
+
+    query = getattr(update, "callback_query", None)
+    if query and str(query.data or "").startswith("sub_check"):
+        return
+
+    # The main bot's subscription policy is also the source of truth for
+    # commands, settings, admin callbacks, download callbacks and inline mode.
+    try:
+        from services.subscription_gate import enforce_subscription
+        allowed = await enforce_subscription(update, context, user)
+    except Exception:
+        system_logger.exception(
+            "Forced-subscription guard failed closed for user=%s", user.id
+        )
+        allowed = False
+        message = update.effective_message
+        if message is not None:
+            try:
+                await message.reply_text(
+                    "تعذّر التحقق من الاشتراك حاليًا. لن يُسمح باستخدام البوت "
+                    "حتى يعود التحقق للعمل. حاول بعد قليل."
+                )
+            except Exception:
+                pass
+        elif query:
+            try:
+                await query.answer(
+                    "تعذّر التحقق من الاشتراك. حاول بعد قليل.", show_alert=True
+                )
+            except Exception:
+                pass
+        else:
+            inline = getattr(update, "inline_query", None)
+            if inline:
+                try:
+                    await inline.answer([], cache_time=0, is_personal=True)
+                except Exception:
+                    pass
+
+    if not allowed:
+        raise ApplicationHandlerStop
 
 
 async def message_router(update: Update, context):
@@ -226,6 +280,11 @@ def build_application(token: str | None = None, clone: bool = False) -> Applicat
         raise ValueError("TELEGRAM_BOT_TOKEN is not set.")
 
     app = Application.builder().token(bot_token).post_init(_make_post_init(clone)).build()
+
+    # Global subscription gate MUST run before all user-facing handlers.
+    # Group -1 + ApplicationHandlerStop prevents commands/callbacks/inline mode
+    # from bypassing forced subscription; only the verification callback passes.
+    app.add_handler(TypeHandler(Update, forced_subscription_guard), group=-1)
 
     # No language-selection conversation: /start immediately opens the Arabic bot.
     app.add_handler(CommandHandler("start", start_command))
