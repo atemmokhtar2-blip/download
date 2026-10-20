@@ -180,8 +180,24 @@ async def enforce_subscription(update, context, user) -> bool:
     if is_clone_bot(getattr(getattr(context, "bot", None), "username", None)):
         return True
 
-    if is_admin(user.id) or is_banned(user.id):
+    if is_admin(user.id):
         return True
+
+    if is_banned(user.id):
+        query = getattr(update, "callback_query", None)
+        message = update.effective_message
+        notice = "حسابك محظور من استخدام البوت."
+        if query:
+            try:
+                await query.answer(notice, show_alert=True)
+            except Exception:
+                pass
+        elif message is not None:
+            try:
+                await message.reply_text(notice)
+            except Exception:
+                pass
+        return False
 
     from database import subscription as db
     if not db.subscription_enabled():
@@ -190,8 +206,26 @@ async def enforce_subscription(update, context, user) -> bool:
 
     channels = _active_global_channels()
     if not channels:
-        logger.info("force-sub: no active channels — uid=%s passes", user.id)
-        return True
+        # Enabled-but-empty is a configuration failure, not permission to pass.
+        # Fail closed so a broken channel list cannot silently disable the gate.
+        logger.error("force-sub: enabled but no active channels — uid=%s blocked", user.id)
+        query = getattr(update, "callback_query", None)
+        message = update.effective_message
+        notice = (
+            "الاشتراك الإجباري مفعّل لكن لا توجد قناة نشطة للتحقق. "
+            "تم إيقاف الاستخدام مؤقتًا لحين إصلاح الإعدادات."
+        )
+        if query:
+            try:
+                await query.answer(notice, show_alert=True)
+            except Exception:
+                pass
+        elif message is not None:
+            try:
+                await message.reply_text(notice)
+            except Exception:
+                pass
+        return False
 
     missing, errored = await _verify(context.bot, user.id, channels)
     if not missing and not errored:
