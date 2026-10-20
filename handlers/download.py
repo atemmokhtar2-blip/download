@@ -260,6 +260,24 @@ async def _safe_vault(context, sent_message):
         return None
 
 
+def _basic_clone_promo_markup(context):
+    """Promotion link shown only on completed video deliveries from Basic clones."""
+    try:
+        pctx = plan_policy.plan_context(context.bot)
+        if not pctx.get("is_clone") or str(pctx.get("plan") or "").lower() != plan_policy.PLAN_BASIC:
+            return None
+        from config.settings import MAIN_BOT_USERNAME
+        username = str(MAIN_BOT_USERNAME or "K_J7Bot").strip().lstrip("@")
+        if not username:
+            return None
+        return InlineKeyboardMarkup([[
+            inline_button("اصنع بوتك الخاص", url=f"https://t.me/{username}")
+        ]])
+    except Exception:
+        logger.debug("Basic clone promo button unavailable", exc_info=True)
+        return None
+
+
 def _completion_caption(lang: str, settings: dict | None) -> str | None:
     """Completion caption shown on delivered media, honoring ``notify_complete``.
 
@@ -971,9 +989,9 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 elif is_image:
                     await query.message.reply_photo(photo=fid, caption=brand_caption)
                 elif delivery_mode == "file":
-                    await query.message.reply_document(document=fid, caption=brand_caption)
+                    await query.message.reply_document(document=fid, caption=brand_caption, reply_markup=_basic_clone_promo_markup(context))
                 else:
-                    await query.message.reply_video(video=fid, caption=brand_caption)
+                    await query.message.reply_video(video=fid, caption=brand_caption, reply_markup=_basic_clone_promo_markup(context))
             _safe_store(increment_downloads, user.id)
             release_user_download(user.id)
             return
@@ -1365,6 +1383,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                                     video=InputFile(f, filename=f"{safe_title}_part{i}.mp4"),
                                     caption=part_label,
                                     supports_streaming=True,
+                                    reply_markup=_basic_clone_promo_markup(context) if i == total else None,
                                 )
 
                         await _upload_with_retry(_send_part)
@@ -1382,11 +1401,13 @@ async def _run_download(query, context, info, user, lang, quality_label,
                             return await query.message.reply_document(
                                 document=InputFile(f, filename=f"{safe_title}.mp4"),
                                 caption=complete_caption,
+                                reply_markup=_basic_clone_promo_markup(context),
                             )
                         return await query.message.reply_video(
                             video=InputFile(f, filename=f"{safe_title}.mp4"),
                             caption=complete_caption,
                             supports_streaming=True,
+                            reply_markup=_basic_clone_promo_markup(context),
                         )
 
                 sent = await _upload_with_retry(_send_video)
