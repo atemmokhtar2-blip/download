@@ -781,11 +781,25 @@ def _clone_source(inst: dict) -> str:
     return f"clone:{int((inst or {}).get('bot_id') or 0)}"
 
 
+def _clone_membership_query(inst: dict) -> tuple[str, tuple]:
+    """Isolated union of durable memberships and legacy clone-source rows."""
+    instance_id = int((inst or {}).get("id") or 0)
+    return (
+        """
+        SELECT telegram_id, username, first_name, registered_at, last_active_at
+        FROM clone_users WHERE instance_id = ?
+        UNION
+        SELECT telegram_id, username, first_name, registered_at, last_active_at
+        FROM ref_users WHERE source = ?
+        """,
+        (instance_id, _clone_source(inst)),
+    )
+
+
 def clone_users_count(inst: dict) -> int:
     try:
-        row = pg.fetchone(
-            "SELECT COUNT(*) AS cnt FROM clone_users WHERE instance_id = ?",
-            (int((inst or {}).get("id") or 0),))
+        sql, params = _clone_membership_query(inst)
+        row = pg.fetchone(f"SELECT COUNT(*) AS cnt FROM ({sql}) AS members", params)
         return int((row or {}).get("cnt") or 0)
     except Exception:
         logger.exception("clone user count failed instance=%s", (inst or {}).get("id"))
@@ -794,10 +808,11 @@ def clone_users_count(inst: dict) -> int:
 
 def clone_active_users_count(inst: dict, days: int = 7) -> int:
     try:
+        sql, params = _clone_membership_query(inst)
         row = pg.fetchone(
-            "SELECT COUNT(*) AS cnt FROM clone_users WHERE instance_id = ? "
-            "AND last_active_at >= CURRENT_TIMESTAMP - (? * INTERVAL '1 day')",
-            (int((inst or {}).get("id") or 0), int(days)))
+            f"SELECT COUNT(*) AS cnt FROM ({sql}) AS members "
+            "WHERE last_active_at >= CURRENT_TIMESTAMP - (? * INTERVAL '1 day')",
+            (*params, int(days)))
         return int((row or {}).get("cnt") or 0)
     except Exception:
         logger.exception("clone active-user count failed instance=%s", (inst or {}).get("id"))
@@ -806,11 +821,11 @@ def clone_active_users_count(inst: dict, days: int = 7) -> int:
 
 def list_clone_users(inst: dict, limit: int = 8, offset: int = 0) -> list[dict]:
     try:
+        sql, params = _clone_membership_query(inst)
         return pg.fetchall(
-            "SELECT telegram_id, username, first_name, registered_at, last_active_at "
-            "FROM clone_users WHERE instance_id = ? "
+            f"SELECT * FROM ({sql}) AS members "
             "ORDER BY registered_at DESC, telegram_id DESC LIMIT ? OFFSET ?",
-            (int((inst or {}).get("id") or 0), int(limit), int(offset)))
+            (*params, int(limit), int(offset)))
     except Exception:
         logger.exception("clone user list failed instance=%s", (inst or {}).get("id"))
         return []
@@ -820,21 +835,20 @@ def search_clone_user(inst: dict, query: str) -> list[dict]:
     q = str(query or "").strip()
     if not q:
         return []
-    instance_id = int((inst or {}).get("id") or 0)
     try:
+        sql, params = _clone_membership_query(inst)
         if q.isdigit():
             return pg.fetchall(
-                "SELECT telegram_id, username, first_name, registered_at, last_active_at "
-                "FROM clone_users WHERE instance_id = ? AND telegram_id = ?",
-                (instance_id, int(q)))
+                f"SELECT * FROM ({sql}) AS members WHERE telegram_id = ?",
+                (*params, int(q)))
         like = f"%{q[:64]}%"
         return pg.fetchall(
-            "SELECT telegram_id, username, first_name, registered_at, last_active_at "
-            "FROM clone_users WHERE instance_id = ? AND (username ILIKE ? OR first_name ILIKE ?) "
+            f"SELECT * FROM ({sql}) AS members "
+            "WHERE username ILIKE ? OR first_name ILIKE ? "
             "ORDER BY registered_at DESC LIMIT 10",
-            (instance_id, like, like))
+            (*params, like, like))
     except Exception:
-        logger.exception("clone user search failed instance=%s", instance_id)
+        logger.exception("clone user search failed instance=%s", (inst or {}).get("id"))
         return []
 
 
@@ -842,13 +856,12 @@ def clone_user_detail(inst: dict, user_id: int) -> dict:
     inst_id = int((inst or {}).get("id") or 0)
     user = None
     try:
+        sql, params = _clone_membership_query(inst)
         user = pg.fetchone(
-            "SELECT telegram_id, username, first_name, registered_at, last_active_at "
-            "FROM clone_users WHERE instance_id = ? AND telegram_id = ?",
-            (inst_id, int(user_id)))
+            f"SELECT * FROM ({sql}) AS members WHERE telegram_id = ? LIMIT 1",
+            (*params, int(user_id)))
     except Exception:
         logger.exception("clone user detail failed instance=%s uid=%s", inst_id, user_id)
-        user = None
     return {
         "user": user,
         "downloads": count_downloads_for_user(inst_id, user_id),
