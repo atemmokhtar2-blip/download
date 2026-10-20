@@ -156,6 +156,53 @@ def test_referrer_stage_smarts():
     ) == "awaiting_token"
 
 
+def test_clone_membership_is_per_instance_for_existing_users():
+    from types import SimpleNamespace
+
+    user_id = 935001
+    bot_a, bot_b = 935101, 935102
+    try:
+        # Existing global users must be added to each clone independently.
+        pg.execute(
+            "INSERT INTO ref_users (telegram_id, username, first_name, source, registered_at, last_active_at, activity_days) "
+            "VALUES (?, ?, ?, 'main', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, '') "
+            "ON CONFLICT (telegram_id) DO UPDATE SET source = 'main'",
+            (user_id, "member_test", "Member Test"),
+        )
+        pg.execute(
+            "INSERT INTO bot_instances (owner_id, bot_id, bot_username, status, plan) "
+            "VALUES (?, ?, ?, 'active', 'pro') ON CONFLICT (bot_id) DO NOTHING",
+            (user_id + 10, bot_a, "membership_a_bot"),
+        )
+        pg.execute(
+            "INSERT INTO bot_instances (owner_id, bot_id, bot_username, status, plan) "
+            "VALUES (?, ?, ?, 'active', 'pro') ON CONFLICT (bot_id) DO NOTHING",
+            (user_id + 20, bot_b, "membership_b_bot"),
+        )
+        user = SimpleNamespace(id=user_id, username="member_test", first_name="Member Test")
+        R.register_user(user, is_new=False, source=f"clone:{bot_a}")
+        R.register_user(user, is_new=False, source=f"clone:{bot_b}")
+
+        inst_a = pg.fetchone("SELECT id FROM bot_instances WHERE bot_id = ?", (bot_a,))
+        inst_b = pg.fetchone("SELECT id FROM bot_instances WHERE bot_id = ?", (bot_b,))
+        assert inst_a and inst_b
+        assert pg.fetchone(
+            "SELECT 1 AS ok FROM clone_users WHERE instance_id = ? AND telegram_id = ?",
+            (int(inst_a["id"]), user_id),
+        )
+        assert pg.fetchone(
+            "SELECT 1 AS ok FROM clone_users WHERE instance_id = ? AND telegram_id = ?",
+            (int(inst_b["id"]), user_id),
+        )
+        # Membership in another clone must not rewrite the global source.
+        global_user = pg.fetchone("SELECT source FROM ref_users WHERE telegram_id = ?", (user_id,))
+        assert global_user["source"] == "main"
+    finally:
+        pg.execute("DELETE FROM clone_users WHERE telegram_id = ?", (user_id,))
+        pg.execute("DELETE FROM bot_instances WHERE bot_id IN (?, ?)", (bot_a, bot_b))
+        pg.execute("DELETE FROM ref_users WHERE telegram_id = ?", (user_id,))
+
+
 def test_support_ticket_lifecycle():
     with dbm.db_cursor() as c:
         c.execute("DELETE FROM support_ticket_messages")
