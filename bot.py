@@ -122,6 +122,13 @@ async def message_router(update: Update, context):
             normalize_button_text(t("en", "menu_admin")),
         }
         if norm in download_btn:
+            # Reply-keyboard menu actions must pass the same forced-subscription
+            # gate as direct URL messages and download callbacks. Without this,
+            # tapping "تحميل" repeatedly leaks the next-step prompt to users
+            # who have not joined the required channels.
+            from services.subscription_gate import enforce_subscription
+            if not await enforce_subscription(update, context, update.effective_user):
+                return
             await update.message.reply_text(t("ar", "send_url_prompt"), parse_mode="HTML")
         elif norm in settings_btn:
             # Open the real settings menu (same screen as /settings).
