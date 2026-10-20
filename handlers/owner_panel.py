@@ -575,7 +575,7 @@ def _user_profile(target_id: int, tab: str = "main") -> tuple[str, InlineKeyboar
                 f"• الخطة: {plan_badge}\n"
                 f"• الانتهاء: <code>{escape(exp_txt)}</code>\n"
                 f"• آخر خطأ: <code>{escape(inst.get('last_error') or 'لا يوجد')}</code>\n"
-                f"• التفعيل: <code>{escape((inst.get('activated_at') or '—')[:16] if inst.get('activated_at') else '—')}</code>\n"
+                f"• التفعيل: <code>{escape(str(inst.get('activated_at') or '—')[:16])}</code>\n"
             )
         else:
             body = "\n🤖 <b>النسخة الخاصة</b>\n• لا يملك نسخة خاصة.\n"
