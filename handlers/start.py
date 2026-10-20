@@ -173,23 +173,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=build_main_keyboard(context, user.id),
     )
 
-    # Inside a clone instance, new users always see the way back to the
-    # main bot (sent once per process session so it never becomes spam).
-    try:
-        if is_clone_bot(context.bot.username or "") and MAIN_BOT_USERNAME and \
-                not context.user_data.get("back_to_main_sent"):
-            context.user_data["back_to_main_sent"] = True
-            await update.message.reply_text(
-                "🏠 هذا البوت نسخة تعمل ضمن شبكة البوت الأساسي.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton(
-                        "العودة إلى البوت الأساسي",
-                        url=f"https://t.me/{MAIN_BOT_USERNAME}",
-                    ),
-                ]]),
-            )
-    except Exception:
-        pass
+    # The promotion/back-to-main link is intentionally NOT sent in the
+    # welcome flow. Basic clones show the single "اصنع بوتك الخاص" link
+    # only beneath a successfully delivered video; Pro clones never show it.
 
     # 👑 Auto-appointment note: the Pro clone's owner/admins are told — once
     # per process session — that their OWN isolated control panel is ready
