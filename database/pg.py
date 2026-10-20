@@ -170,6 +170,18 @@ def init_referral_schema() -> None:
             last_active_at TIMESTAMP,
             activity_days TEXT DEFAULT ''
         )""",
+        # Per-instance membership is separate from the global referral-user
+        # mirror. A Telegram user may use multiple clones without their
+        # membership being overwritten or leaked between instances.
+        f"""CREATE TABLE IF NOT EXISTS clone_users (
+            instance_id {bi} NOT NULL,
+            telegram_id {bi} NOT NULL,
+            username TEXT DEFAULT '',
+            first_name TEXT DEFAULT '',
+            registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_active_at TIMESTAMP,
+            PRIMARY KEY (instance_id, telegram_id)
+        )""",
         # One permanent referral code per owner.
         f"""CREATE TABLE IF NOT EXISTS referral_codes (
             owner_id {bi} NOT NULL UNIQUE,
@@ -278,6 +290,7 @@ def init_referral_schema() -> None:
     ]
     indexes = [
         "CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals (referrer_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_clone_users_instance_registered ON clone_users (instance_id, registered_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_instances_owner ON bot_instances (owner_id)",
         "CREATE INDEX IF NOT EXISTS idx_instances_status ON bot_instances (status)",
         "CREATE INDEX IF NOT EXISTS idx_redemption_log_code ON redemption_log (code_id, action)",
@@ -295,6 +308,7 @@ def init_referral_schema() -> None:
     ensure_redemption_targeted_user_column()
     ensure_clone_settings_migration()
     ensure_plan_schema()
+    ensure_clone_users_migration()
     logger.info("Referral schema ready on backend=%s", BACKEND)
 
 
@@ -439,3 +453,24 @@ def ensure_redemption_targeted_user_column() -> None:
         )
     except Exception:
         logger.exception("redemption targeted-user column migration failed")
+
+
+def ensure_clone_users_migration() -> None:
+    """Backfill per-instance memberships from legacy clone source markers."""
+    try:
+        execute(
+            """
+            INSERT INTO clone_users
+                (instance_id, telegram_id, username, first_name, registered_at, last_active_at)
+            SELECT bi.id, ru.telegram_id, ru.username, ru.first_name,
+                   COALESCE(ru.registered_at, CURRENT_TIMESTAMP),
+                   COALESCE(ru.last_active_at, ru.registered_at, CURRENT_TIMESTAMP)
+            FROM ref_users ru
+            JOIN bot_instances bi
+              ON ru.source = 'clone:' || CAST(bi.bot_id AS TEXT)
+            WHERE bi.bot_id IS NOT NULL
+            ON CONFLICT (instance_id, telegram_id) DO NOTHING
+            """
+        )
+    except Exception:
+        logger.exception("clone users legacy membership migration failed")
