@@ -35,7 +35,7 @@ from telegram.ext import ContextTypes
 
 from middlewares.auth import is_owner, is_admin
 from utils.button_text import inline_button
-from utils.telegram_safe import safe_edit
+from utils.telegram_safe import safe_edit, safe_answer
 from config.settings import OWNER_ID, ADMIN_IDS, TEMP_DIR
 from database.admin_audit import log_admin_action, get_admin_audit, get_admin_audit_stats
 from database.users import (
@@ -516,7 +516,7 @@ async def _export_csv(context, query):
         caption=f"📤 تصدير {len(rows)} مستخدم — الحقول المسموح بها للمالك فقط.",
     )
     log_admin_action(query.from_user.id, "owner_export_users", detail=f"rows={len(rows)}")
-    await query.answer("✅ تم تجهيز الملف وإرساله.", show_alert=False)
+    await safe_answer(query, "✅ تم تجهيز الملف وإرساله.", show_alert=False)
 
 
 # ---- user profile ----------------------------------------------------------------------
@@ -1751,13 +1751,13 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # THE code-level owner gate — every single callback passes through here.
     if not _owner_gate(update) or not _clone_guard(update):
         try:
-            await query.answer("⛔ هذه اللوحة محمية للمالك الأساسي فقط.", show_alert=True)
+            await safe_answer(query, "⛔ هذه اللوحة محمية للمالك الأساسي فقط.", show_alert=True)
         except Exception:
             pass
         return
     uid = query.from_user.id
     data = query.data or ""
-    await query.answer()
+    await safe_answer(query, )
 
     if data == "own_home":
         OWNER_STATES.pop(uid, None)
@@ -2234,10 +2234,10 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not target_id or role not in rbac.GRANTABLE_ROLES:
             return
         if target_id <= 0:
-            await query.answer("⚠️ أرسل Telegram ID صحيحًا.", show_alert=True)
+            await safe_answer(query, "⚠️ أرسل Telegram ID صحيحًا.", show_alert=True)
             return
         if target_id == OWNER_ID or target_id in set(ADMIN_IDS):
-            await query.answer("🔒 حساب المالك وأدمن البيئة ثابتان من الاستضافة ولا تُغيّر رتبتهما هنا.", show_alert=True)
+            await safe_answer(query, "🔒 حساب المالك وأدمن البيئة ثابتان من الاستضافة ولا تُغيّر رتبتهما هنا.", show_alert=True)
             log_admin_action(uid, "owner_rbac_protected_target_denied", target_id,
                              detail=f"محاولة منح/تغيير رتبة={role} لحساب ثابت")
             return
@@ -2258,7 +2258,7 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not target_id:
             return
         if target_id == OWNER_ID or target_id in set(ADMIN_IDS):
-            await query.answer("🔒 حساب المالك أو أدمن البيئة ثابت ولا يُدار من هنا.", show_alert=True)
+            await safe_answer(query, "🔒 حساب المالك أو أدمن البيئة ثابت ولا يُدار من هنا.", show_alert=True)
             log_admin_action(uid, "owner_rbac_protected_target_denied", target_id,
                              detail="محاولة تعديل حساب ثابت من البيئة")
             return
@@ -2269,7 +2269,7 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not target_id:
             return
         if target_id == OWNER_ID or target_id in set(ADMIN_IDS):
-            await query.answer("🔒 حساب المالك أو أدمن البيئة ثابت ولا يُدار من هنا.", show_alert=True)
+            await safe_answer(query, "🔒 حساب المالك أو أدمن البيئة ثابت ولا يُدار من هنا.", show_alert=True)
             log_admin_action(uid, "owner_rbac_protected_target_denied", target_id,
                              detail="محاولة عزل حساب ثابت من البيئة")
             return
