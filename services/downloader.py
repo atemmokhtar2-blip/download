@@ -225,6 +225,8 @@ YOUTUBE_PLAYER_CLIENTS = {
     "android", "android_vr", "ios", "mweb",
     "tv", "tv_embedded", "tv_simply", "web",
     "web_creator", "web_embedded", "web_music", "web_safari",
+    # Present in newer yt-dlp builds; harmless when not selected by our ladder.
+    "tv_downgraded", "visionos",
 }
 
 
@@ -320,13 +322,13 @@ def _youtube_client_profiles() -> list[tuple[str, list[str]]]:
         ("tv-simply", ["tv_simply", "tv_embedded"]),
         ("full", [c for c in preferred if c in available][:8]),
     ]
-    seen: set[tuple[str, ...]] = set()
     out: list[tuple[str, list[str]]] = []
     for name, clients in profiles:
         filtered = [c for c in clients if c in available]
-        key = tuple(filtered)
-        if filtered and key not in seen:
-            seen.add(key)
+        # Preserve named semantic profiles even when their current client list
+        # matches another profile after filtering. The labels are part of the
+        # retry matrix and keep callers/tests stable across yt-dlp versions.
+        if filtered:
             out.append((name, filtered))
     return out
 
