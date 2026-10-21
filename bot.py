@@ -81,6 +81,54 @@ async def forced_subscription_guard(update: Update, context):
         return
 
     query = getattr(update, "callback_query", None)
+
+    # Repeated Download-button presses are guarded ONLY in the distributed
+    # main bot. Clone instances keep their own policy and are never modified by
+    # this main-bot anti-spam rule. The guard is persistent across restarts.
+    if not context.application.bot_data.get("is_clone_instance", False):
+        try:
+            from middlewares.auth import is_admin
+            if not is_admin(user.id):
+                reason = ""
+                if query and str(query.data or "").startswith("dl_"):
+                    reason = "download_callback"
+                else:
+                    message = update.effective_message
+                    button_text = (getattr(message, "text", "") or "").strip().casefold()
+                    if button_text in {"📥 تحميل", "تحميل", "📥 download", "download"}:
+                        reason = "download_menu"
+                if reason:
+                    from database.interaction_abuse import check_repeated_action
+                    decision, remaining = check_repeated_action(user.id, reason)
+                    if decision != "allow":
+                        if query:
+                            try:
+                                if decision == "banned":
+                                    await query.answer(
+                                        f"تم إيقاف استخدامك مؤقتًا بسبب تكرار الضغطات. حاول بعد {max(1, (remaining + 59) // 60)} دقيقة.",
+                                        show_alert=True,
+                                    )
+                                else:
+                                    await query.answer()
+                            except Exception:
+                                pass
+                        elif decision == "banned":
+                            message = update.effective_message
+                            if message is not None:
+                                try:
+                                    await message.reply_text(
+                                        f"تم إيقاف استخدامك مؤقتًا بسبب تكرار الضغطات لمدة {max(1, (remaining + 59) // 60)} دقائق."
+                                    )
+                                except Exception:
+                                    pass
+                        raise ApplicationHandlerStop
+        except ApplicationHandlerStop:
+            raise
+        except Exception:
+            # Anti-abuse storage trouble must be visible to logs, but must not
+            # accidentally take down the entire update dispatcher.
+            system_logger.exception("Main-bot anti-spam guard failed for user=%s", user.id)
+
     if query and str(query.data or "").startswith("sub_check"):
         return
 
@@ -280,6 +328,7 @@ def build_application(token: str | None = None, clone: bool = False) -> Applicat
         raise ValueError("TELEGRAM_BOT_TOKEN is not set.")
 
     app = Application.builder().token(bot_token).post_init(_make_post_init(clone)).build()
+    app.bot_data["is_clone_instance"] = bool(clone)
 
     # Global subscription gate MUST run before all user-facing handlers.
     # Group -1 + ApplicationHandlerStop prevents commands/callbacks/inline mode
