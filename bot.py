@@ -90,9 +90,12 @@ async def forced_subscription_guard(update: Update, context):
             from middlewares.auth import is_admin
             if not is_admin(user.id):
                 reason = ""
-                if query and str(query.data or "").startswith("dl_"):
-                    reason = "download_callback"
-                else:
+                if query:
+                    callback_action = str(query.data or "").split("|", 1)[0]
+                    if (callback_action in {"dl_smart", "dl_audio", "dl_audio_320", "dl_image", "dl_album"}
+                            or callback_action.startswith("dl_video_")):
+                        reason = "download_callback"
+                if not reason:
                     message = update.effective_message
                     button_text = (getattr(message, "text", "") or "").strip().casefold()
                     if button_text in {"📥 تحميل", "تحميل", "📥 download", "download"}:
