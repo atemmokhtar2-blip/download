@@ -37,6 +37,26 @@ def _ensure_schema() -> None:
         _initialized = True
 
 
+def active_ban_seconds(user_id: int) -> int:
+    """Return remaining temporary-ban seconds, or zero when not currently banned."""
+    _ensure_schema()
+    with db_cursor() as c:
+        c.execute(
+            "SELECT ban_until FROM interaction_abuse WHERE user_id = ?",
+            (int(user_id),),
+        )
+        row = c.fetchone()
+        if not row or not row.get("ban_until"):
+            return 0
+        c.execute(
+            "SELECT CASE WHEN CAST(? AS TIMESTAMP) > CURRENT_TIMESTAMP "
+            "THEN GREATEST(1, CEIL(EXTRACT(EPOCH FROM (CAST(? AS TIMESTAMP) - CURRENT_TIMESTAMP)))) "
+            "ELSE 0 END AS remaining",
+            (row["ban_until"], row["ban_until"]),
+        )
+        return int((c.fetchone() or {}).get("remaining") or 0)
+
+
 def check_repeated_action(user_id: int, reason: str) -> tuple[str, int]:
     """Return (allow|suppress|banned, seconds_remaining), persisting across restarts."""
     _ensure_schema()
