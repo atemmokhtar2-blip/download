@@ -119,7 +119,10 @@ async def forced_subscription_guard(update: Update, context):
                 if not reason:
                     message = update.effective_message
                     button_text = (getattr(message, "text", "") or "").strip().casefold()
-                    if button_text in {"📥 تحميل", "تحميل", "📥 download", "download"}:
+                    # Telegram reply-keyboard labels may return the emoji before
+                    # OR after the Arabic label (e.g. "تحميل 📥").
+                    normalized_button = button_text.replace("📥", "").strip()
+                    if normalized_button in {"تحميل", "download"}:
                         reason = "download_menu"
                 if reason:
                     from database.interaction_abuse import check_repeated_action
