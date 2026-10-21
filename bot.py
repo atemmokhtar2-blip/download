@@ -89,6 +89,27 @@ async def forced_subscription_guard(update: Update, context):
         try:
             from middlewares.auth import is_admin
             if not is_admin(user.id):
+                from database.interaction_abuse import active_ban_seconds
+                active_ban = active_ban_seconds(user.id)
+                if active_ban > 0:
+                    if query:
+                        try:
+                            await query.answer(
+                                f"استخدامك متوقف مؤقتًا. حاول بعد {max(1, (active_ban + 59) // 60)} دقيقة.",
+                                show_alert=True,
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        message = update.effective_message
+                        if message is not None:
+                            try:
+                                await message.reply_text(
+                                    f"استخدامك متوقف مؤقتًا. حاول بعد {max(1, (active_ban + 59) // 60)} دقيقة."
+                                )
+                            except Exception:
+                                pass
+                    raise ApplicationHandlerStop
                 reason = ""
                 if query:
                     callback_action = str(query.data or "").split("|", 1)[0]
