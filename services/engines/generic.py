@@ -138,6 +138,25 @@ class EmbedFallbackEngine(YtDlpFallbackEngine):
         fallback_play = candidates[0] if candidates else play_url
         return await downloader._generic_download_video(resolved_url, format_id, quality_label, progress_callback, fallback_play)
 
+class AudioFallbackEngine(YtDlpFallbackEngine):
+    """Base for audio-only platforms (Mixcloud, Bandcamp, Audiomack, Deezer, ...).
+
+    These sites expose no og:video/JSON-LD/video-embed player, so running the
+    video embed resolver is pure wasted work (and can occasionally mis-classify
+    a track page as video). This base inherits the yt-dlp-fallback path directly
+    — its ``analyze`` and ``download_audio`` go straight to yt-dlp's own
+    per-platform audio extractor, which IS the correct distinct technique for
+    each site — and advertises audio-only capabilities so the dashboard and
+    quality gate never offer a phantom "📹 video" button for a song.
+    """
+
+    techniques = ("yt-dlp native audio extractor (per-platform)",)
+    capabilities = frozenset({"audio"})
+
+    async def download_audio(self, url: str, progress_callback: Callable | None = None) -> str | None:
+        from services import downloader
+        return await downloader._generic_download_audio(url, progress_callback)
+
 class GenericEngine(YtDlpFallbackEngine):
     name = "GenericEngine"
     techniques = ("yt-dlp",)
