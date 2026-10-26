@@ -239,7 +239,7 @@ class InstagramEngine(PlatformEngine):
         generic merge path on the canonical page URL.
         """
         from services import downloader
-        from services.instagram_scraper import scrape_instagram
+        from services.instagram_scraper import scrape_instagram, direct_download_headers
         from middlewares.concurrency import get_executor
         import asyncio
 
@@ -272,28 +272,56 @@ class InstagramEngine(PlatformEngine):
         except Exception as exc:
             error_logger.error("InstagramEnginePro resolve before download failed: %s", exc)
 
-        for candidate, source in candidates:
-            try:
-                path = await loop.run_in_executor(
-                    get_executor(),
-                    downloader._download_direct_sync,
-                    candidate,
-                    {"Referer": "https://www.instagram.com/", "Origin": "https://www.instagram.com"},
-                    60,
-                    progress_callback,
-                    loop,
-                    "xdl-instagram",
-                )
-                path = await downloader.prepare_video_async(path, source=f"instagram-direct:{source}")
-                if path:
-                    return path
-                download_logger.info("Instagram direct candidate failed/was silent source=%s", source)
-            except downloader.FileTooLargeError:
-                raise
-            except downloader.DownloadCancelledError:
-                raise
-            except Exception as exc:
-                error_logger.error("InstagramEnginePro direct candidate failed source=%s: %s", source, exc)
+        async def _try_download(candidate: str, source: str, prefix: str) -> str | None:
+            path = await loop.run_in_executor(
+                get_executor(),
+                downloader._download_direct_sync,
+                candidate,
+                direct_download_headers(),
+                60,
+                progress_callback,
+                loop,
+                prefix,
+            )
+            return await downloader.prepare_video_async(path, source=f"instagram-direct:{source}")
+
+        async def _walk(items) -> str | None:
+            for candidate, source, prefix in items:
+                try:
+                    path = await _try_download(candidate, source, prefix)
+                    if path:
+                        return path
+                    download_logger.info("Instagram direct candidate failed/was silent source=%s", source)
+                except downloader.FileTooLargeError:
+                    raise
+                except downloader.DownloadCancelledError:
+                    raise
+                except Exception as exc:
+                    error_logger.error("InstagramEnginePro direct candidate failed source=%s: %s", source, exc)
+            return None
+
+        path = await _walk([(c, s, "xdl-instagram") for c, s in candidates])
+        if path:
+            return path
+
+        # Instagram CDN URLs are short-lived. One fresh re-resolve may surface a
+        # new signed URL (the shared seen-set means only genuinely NEW candidates
+        # are walked) before the heavier yt-dlp merge path is attempted.
+        before_refresh = len(candidates)
+        try:
+            meta2 = await loop.run_in_executor(get_executor(), scrape_instagram, resolved_url)
+            if meta2:
+                resolved_url = meta2.get("webpage_url") or meta2.get("url") or resolved_url
+                _add(meta2.get("play_url"), meta2.get("source") or "instagram-direct-refresh")
+                for item in meta2.get("album_items") or []:
+                    if item.get("type") == "video":
+                        _add(item.get("play_url") or item.get("url"), "instagram-slide-refresh")
+        except Exception as exc:
+            error_logger.error("InstagramEnginePro refresh resolve failed: %s", exc)
+        if len(candidates) > before_refresh:
+            path = await _walk([(c, s, "xdl-instagram-refresh") for c, s in candidates[before_refresh:]])
+            if path:
+                return path
 
         # Final fallback uses the canonical page URL; pass the best CDN URL as a
         # first direct target so yt-dlp can also attempt to merge it.

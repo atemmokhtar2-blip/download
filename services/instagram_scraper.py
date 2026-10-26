@@ -90,6 +90,7 @@ def _score_result(result: dict | None) -> int:
     source_bonus = {
         "graphql": 100,
         "graphql_doc": 95,
+        "public_api": 90,
         "embed": 82,
         "gallery_dl": 76,
         "instaloader": 70,
@@ -146,6 +147,63 @@ def _normalize_ig_url(url: str) -> str:
 
 def _sessionid() -> str | None:
     return (os.getenv("INSTAGRAM_SESSIONID") or os.getenv("IG_SESSIONID") or "").strip() or None
+
+
+_IG_COOKIE_NAMES = {
+    "sessionid", "csrftoken", "ds_user_id", "ig_did", "rur", "mid", "shbid", "shbts",
+}
+
+
+def _cookie_header() -> str:
+    """Assemble the Instagram auth cookie header for the request AND the direct CDN fetch.
+
+    Prefers ``INSTAGRAM_SESSIONID`` / ``IG_SESSIONID`` and additionally reads the
+    shared ``cookies.txt`` (Netscape jar) that yt-dlp also uses. A login-gated
+    CDN URL then downloads with the very same identity that resolved it instead
+    of 403-ing on a blank session.
+    """
+    parts: list[str] = []
+
+    def _add(name: str, value: str | None) -> None:
+        value = (value or "").strip()
+        if value and f"{name}=" not in ";".join(parts):
+            parts.append(f"{name}={value}")
+
+    _add("sessionid", _sessionid())
+    try:
+        from config.settings import YTDLP_COOKIES_FILE
+        cookie_file = YTDLP_COOKIES_FILE
+    except Exception:
+        cookie_file = "cookies.txt"
+    cookie_file = os.getenv("YTDLP_COOKIES_FILE", cookie_file or "cookies.txt") or "cookies.txt"
+    if os.path.exists(cookie_file):
+        try:
+            with open(cookie_file, encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    cols = line.split("\t")
+                    if len(cols) < 7:
+                        continue
+                    name, value = cols[5], cols[6]
+                    if name in _IG_COOKIE_NAMES:
+                        _add(name, value)
+        except Exception:
+            pass
+    return "; ".join(parts)
+
+
+def direct_download_headers() -> dict:
+    """Referer/Origin + auth-cookie header for the direct-CDN download."""
+    hdrs = {
+        "Referer": "https://www.instagram.com/",
+        "Origin": "https://www.instagram.com",
+    }
+    cookie = _cookie_header()
+    if cookie:
+        hdrs["Cookie"] = cookie
+    return hdrs
 
 
 def _http_get(url: str, headers: dict | None = None, timeout: int = 20):
@@ -349,6 +407,38 @@ def _from_graphql(shortcode: str, url: str) -> dict | None:
     return None
 
 
+def _from_public_api(shortcode: str, url: str) -> dict | None:
+    """Classic authless public-JSON endpoint (``?__a=1&__d=dis``).
+
+    Independent of the GraphQL hash/doc-id ladder, this endpoint returns the
+    ``graphql.shortcode_media`` document for public posts. It is a strong extra
+    fallback whenever the GraphQL ladder is 404/empty/challenged.
+    """
+    try:
+        r = _http_get(
+            f"https://www.instagram.com/p/{shortcode}/?__a=1&__d=dis",
+            headers={
+                "Accept": "application/json,text/plain,*/*",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            timeout=18,
+        )
+        if getattr(r, "status_code", 0) != 200:
+            return None
+        data = r.json()
+        node = (
+            ((data.get("graphql") or {}).get("shortcode_media"))
+            or ((data.get("data") or {}).get("shortcode_media"))
+            or ((data.get("data") or {}).get("xdt_shortcode_media"))
+        )
+        if not isinstance(node, dict):
+            return None
+        return _node_to_result(node, url, shortcode, "public_api")
+    except Exception as e:
+        logger.debug("IG public_api %s: %s", shortcode, e)
+        return None
+
+
 def _from_embed(shortcode: str, url: str) -> dict | None:
     for path in (
         f"/p/{shortcode}/embed/captioned/",
@@ -540,6 +630,7 @@ def scrape_instagram(url: str) -> dict | None:
 
     providers = [
         ("graphql", lambda: _from_graphql(shortcode, url)),
+        ("public_api", lambda: _from_public_api(shortcode, url)),
         ("embed", lambda: _from_embed(shortcode, url)),
         ("gallery_dl", lambda: _from_gallery_dl(url)),
         ("instaloader", lambda: _from_instaloader(url)),
