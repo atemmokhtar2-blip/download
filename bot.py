@@ -43,12 +43,26 @@ from handlers.contact_admin import (
 )
 from services.subscription_gate import subscription_check_callback
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache, cleanup_old_history, clone_expiry_worker
+from database.onboarding import record_user_activity
 
 # Arabic-only main menu. Matching is emoji-insensitive (see normalize_button_text)
 # so the buttons work no matter how the client sends the label back.
 MENU_BUTTONS = {"📥 تحميل", "📥 Download", "⚙️ الإعدادات", "⚙️ Settings",
                 "🛠️ لوحة التحكم"}  # clone panel door — routed to clone_admin_command,
                 # which re-gates server-side (clone + Pro + owner/admin only)
+
+
+async def track_user_activity(update: Update, context):
+    """Reset inactivity reminders on any private-chat interaction."""
+    user = update.effective_user
+    chat = update.effective_chat
+    if user is None or chat is None or chat.type != "private" or user.is_bot:
+        return
+    try:
+        await asyncio.to_thread(record_user_activity, user.id)
+    except Exception:
+        # Activity tracking must never block normal bot interactions.
+        system_logger.exception("Could not update inactivity timestamp uid=%s", user.id)
 
 
 async def ping_command(update: Update, context):
@@ -323,6 +337,12 @@ def _make_post_init(is_clone: bool):
         # Clone-plan validity enforcement: auto-stop + expire + notify owners
         # when a clone's basic/pro window ends (every 15 min).
         asyncio.create_task(clone_expiry_worker())
+        try:
+            from services.inactivity_reminders import inactivity_reminder_worker
+            asyncio.create_task(inactivity_reminder_worker(application.bot))
+            system_logger.info("Inactivity reminder worker started (3/7/14 days).")
+        except Exception:
+            system_logger.exception("Could not start inactivity reminder worker")
         system_logger.info("Background workers started.")
         # Boot the clone network: start every ACTIVE earned instance inside
         # this process (referral schema is already initialized in main()).
@@ -375,6 +395,8 @@ def build_application(token: str | None = None, clone: bool = False) -> Applicat
     # Global subscription gate MUST run before all user-facing handlers.
     # Group -1 + ApplicationHandlerStop prevents commands/callbacks/inline mode
     # from bypassing forced subscription; only the verification callback passes.
+    # Track private user activity before subscription gating so any interaction resets reminders.
+    app.add_handler(TypeHandler(Update, track_user_activity), group=-2)
     app.add_handler(TypeHandler(Update, forced_subscription_guard), group=-1)
 
     # No language-selection conversation: /start immediately opens the Arabic bot.
