@@ -33,7 +33,7 @@ def next_start_greeting_index(user_id: int, total: int) -> int:
             INSERT INTO user_start_greetings (user_id, last_index)
             VALUES (?, 0)
             ON CONFLICT (user_id) DO UPDATE SET
-                last_index = (user_start_greetings.last_index + 1) % ?,
+                last_index = MOD(user_start_greetings.last_index + 1, ?),
                 updated_at = datetime('now')
             RETURNING last_index
         """, (int(user_id), total))
