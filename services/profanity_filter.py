@@ -300,9 +300,11 @@ _AR_PHRASES = [
 # Long, unambiguous slurs — matched as compact substrings. Kept strictly to
 # words with NO innocent everyday meaning, so an auto-ban is always justified.
 _AR_STRONG = [
-    # جنسية
+    # جنسية — "كحبه"/"كحاب" are intentionally NOT listed: "كحبة" (a grain/pill)
+    # normalizes to "كحبه" and must never auto-ban; only the unambiguous
+    # ق-spelling "قحبه"/"قحاب" is kept.
     "شرموط", "شرموطه", "شراميط", "شراميت",
-    "قحبه", "قحاب", "كحبه", "كحاب", "عاهره", "عواهر", "عاهر",
+    "قحبه", "قحاب", "عاهره", "عواهر", "عاهر",
     "زانيه", "زواني", "داعره", "داعر", "مومس", "مومسه", "مومسات",
     "منيوك", "منيوكه", "منيوكين", "منيوج", "منيوجه", "منيوجين",
     "متناك", "متناكه", "متناكين", "متناكات",
@@ -335,15 +337,20 @@ _AR_EXACT = {
     "جبان", "جبانه", "تفو", "خرا", "خره", "خراء",
 }
 
-# Long, unambiguous Arabic slurs safe to fuzzy-match (a single substituted
-# letter still fires). Deliberately excludes words with a clean near-neighbor
-# ("منيك" ~ "منيح", "عاهره" ~ "عاهده") so fuzzy never false-positives.
-_AR_FUZZY = frozenset({
-    "شرموط", "شرموطه", "شراميط", "منيوك", "منيوكه", "متناك", "متناكه",
-    "منتاك", "منتاكه", "نايك", "نايكه", "نياك", "نياكه",
-    "معرصه", "ديوث", "قواد", "مقرف", "معتوه", "بضان",
-    "احمق", "نذل", "دنيء", "سافل",
-})
+# Arabic fuzzy (Levenshtein) matching is DISABLED ON PURPOSE. It caught a
+# handful of rare typos but also false-positived on extremely common everyday
+# words that sit a single edit away from a slur — any of which would have
+# caused a permanent ban for an innocent message:
+#     "قواعد"  (rules)      ~ "قواد"   (pimp)
+#     "معرفة"  (knowledge)  ~ "معرصه"  (pimp)
+#     "شرمولة" (a dish)     ~ "شرموطه"
+#     "ناهيك"  (let alone)  ~ "نايك"
+#     "مقصف"   (cafeteria)  ~ "مقرف"
+# A permanent ban is ONLY ever justified by an unambiguous slur, and the exact
+# forms of those slurs are already covered by the STRONG (substring) + EXACT +
+# DUAL + PHRASES layers. Keeping the set empty guarantees no false auto-ban
+# while still catching every real variant that reaches the matching step.
+_AR_FUZZY: frozenset[str] = frozenset()
 
 # Dual-meaning words: they carry a perfectly normal, everyday sense ("حمار" =
 # donkey, "كلب" = dog, "متخلف" = lagging/backward, "زفت" = asphalt, "ساقط" =

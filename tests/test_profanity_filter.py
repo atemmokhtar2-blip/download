@@ -169,3 +169,29 @@ def test_strong_still_avoids_false_positives():
         "zebra",
     ]:
         assert not contains_profanity(text), text
+
+
+def test_everyday_words_never_trigger_auto_ban():
+    """A ban must be justified by an unambiguous slur — never an everyday word.
+
+    These are ordinary Arabic words/names a real user could type into an admin
+    or support message. Each sits a single edit (or normalization step) away
+    from a slur, so guarding them locks the precision fix that keeps an
+    innocent message from producing a permanent auto-ban.
+    """
+    for clean in [
+        # everyday words that used to false-positive through Arabic fuzzy
+        "قواعد", "قواعد النحو", "قوالب", "قيادة", "قائد", "قوانين",
+        "معرفة", "المعرفة", "معرفتي",
+        "شرمولة", "شرموله",
+        "ناهيك", "ناهيك عن",
+        "مقصف", "مقصف المدرسة",
+        # "كحبة" (a grain/pill) vs the removed "كحبه" STRONG entry
+        "كحبة", "كحبة دوا", "حبة", "حبوب", "كعبة", "كعب", "كعك",
+        # common Arabic names that must stay clean
+        "منى", "منير", "منيب", "منصور", "نور", "نيرمين", "نادية", "كريم",
+        "كرم", "كمال", "مصطفى", "أحمد", "محمد", "محمود", "منتصر",
+        # general innocents near-siblings of slurs
+        "بنيت", "سالفة", "سلفة", "مدني", "دين", "دينة", "منيح",
+    ]:
+        assert not contains_profanity(clean), clean
