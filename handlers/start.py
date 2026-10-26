@@ -172,9 +172,34 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.debug("clone custom welcome lookup failed", exc_info=True)
 
-    welcome_text = custom_welcome[:1500] if custom_welcome else (
-        t("ar", "welcome_back") + ref_note
-    )
+    # Main-bot onboarding: show the exact branded welcome until the first-run
+    # guide has been delivered. This also survives a failed subscription check:
+    # the user remains pending and receives the welcome after they return.
+    first_welcome_due = is_new
+    if not first_welcome_due:
+        try:
+            from database.onboarding import help_is_pending
+            first_welcome_due = help_is_pending(user.id)
+        except Exception:
+            logger.exception("Could not inspect first-welcome state uid=%s", user.id)
+
+    if custom_welcome:
+        welcome_text = custom_welcome[:1500]
+    elif is_clone_bot(context.bot.username or ""):
+        # Keep clone defaults isolated from the main bot's branding.
+        welcome_text = t("ar", "welcome_back") + ref_note
+    elif first_welcome_due:
+        welcome_text = (
+            "〆 𝑿𝑬𝑳𝑽𝑶𝑹\\n\\n"
+            "كل لحظة تستحق الاحتفاظ بها.\\n\\n"
+            "فيديو، مقطع صوتي، أو محتوى عجبك على الإنترنت — ابعت رابطه، وخلي الوصول إليه أسهل."
+        )
+    else:
+        welcome_text = (
+            "〆 𝑿𝑬𝑳𝑽𝑶𝑹\\n\\n"
+            "أهلاً بعودتك!\\n"
+            "ابعت الرابط، وسيب الباقي عليّ."
+        )
     await update.message.reply_text(
         welcome_text,
         parse_mode="HTML" if not custom_welcome else None,
