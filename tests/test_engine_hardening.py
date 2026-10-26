@@ -54,7 +54,8 @@ def test_base_opts_rotates_tiktok_api_hosts():
 
 
 if __name__ == "__main__":
-    test_youtube_client_set_has_music_and_embedded_surfaces()
-    test_youtube_profiles_include_music_embedded_mediaconnect()
+    test_youtube_client_set_matches_installed_ytdlp()
+    test_youtube_safe_order_only_emits_real_clients()
+    test_youtube_profiles_include_music_and_embedded()
     test_base_opts_rotates_tiktok_api_hosts()
     print("engine hardening tests passed")

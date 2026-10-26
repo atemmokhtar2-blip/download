@@ -50,6 +50,21 @@ def format_size(size: int | float | None) -> str:
     return f"{size:.1f} TB"
 
 
+def format_duration(seconds: int | float | None) -> str:
+    """Human-readable duration as ``M:SS`` (or ``H:MM:SS`` over an hour)."""
+    try:
+        total = int(seconds or 0)
+    except (TypeError, ValueError):
+        total = 0
+    if total <= 0:
+        return "Unknown"
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
 _BOT_TOKEN_RE = re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,50}\b")
 _URL_AUTH_RE = re.compile(r"(https?://)([^/@\s]+)@")
 
