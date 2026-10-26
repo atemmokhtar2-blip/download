@@ -39,6 +39,28 @@ def test_engine_count_stable() -> None:
     assert len(registered_engines()) == 63
 
 
+def test_no_duplicate_engine_names() -> None:
+    """Registry names are the routing/dashboard identity — a duplicate name is
+    a silent mis-routing bug that corrupts ``first_match`` and the admin engine
+    list without any loud error. Guard against it explicitly."""
+    names = [engine.name for engine in registered_engines()]
+    assert len(names) == len(set(names)), (
+        f"duplicate engine names in registry: "
+        f"{sorted({n for n in names if names.count(n) > 1})}"
+    )
+
+
+def test_no_identical_domains_between_engines() -> None:
+    """Two engines sharing the exact same ``domains`` tuple is a copy-paste
+    mistake (their resolvers would fight over the same URLs). Identical full
+    tuples are forbidden; intentionally OVERLAPPING subsets remain fine."""
+    by_domains: dict[tuple, list] = {}
+    for engine in registered_engines():
+        by_domains.setdefault(tuple(engine.domains), []).append(engine.name)
+    collisions = {d: ns for d, ns in by_domains.items() if len(ns) > 1}
+    assert not collisions, f"engines with identical domains tuples: {collisions}"
+
+
 def test_every_engine_declares_distinct_techniques() -> None:
     seen: dict[tuple, str] = {}
     for engine in registered_engines():
@@ -81,6 +103,8 @@ def test_bespoke_engines_outnumber_generic() -> None:
 
 if __name__ == "__main__":
     test_engine_count_stable()
+    test_no_duplicate_engine_names()
+    test_no_identical_domains_between_engines()
     test_every_engine_declares_distinct_techniques()
     test_named_resolvers_exist()
     test_audio_platforms_are_audio_only()
