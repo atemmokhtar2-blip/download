@@ -14,6 +14,31 @@ def ensure_onboarding_schema() -> None:
                 updated_at TEXT DEFAULT (datetime('now'))
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_start_greetings (
+                user_id BIGINT PRIMARY KEY,
+                last_index INTEGER NOT NULL DEFAULT -1,
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
+
+def next_start_greeting_index(user_id: int, total: int) -> int:
+    """Return a per-user rotating greeting index, persisted across restarts."""
+    total = int(total)
+    if total < 1:
+        raise ValueError("total must be positive")
+    with db_cursor() as cursor:
+        cursor.execute("""
+            INSERT INTO user_start_greetings (user_id, last_index)
+            VALUES (?, 0)
+            ON CONFLICT (user_id) DO UPDATE SET
+                last_index = (user_start_greetings.last_index + 1) % ?,
+                updated_at = datetime('now')
+            RETURNING last_index
+        """, (int(user_id), total))
+        row = cursor.fetchone()
+    return int(row["last_index"])
 
 
 def mark_help_pending(user_id: int) -> None:
