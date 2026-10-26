@@ -36,13 +36,38 @@ def test_arabic_insults_blocked():
         "انت كلب",
         "يا خنزير",
         "احمق",
-        "متخلفه",
         "بضان",
         "نذل",
         "سافل",
-        "واطي",
     ]:
         assert contains_profanity(text), text
+
+
+def test_dual_meaning_words_are_contextual():
+    """Words with a normal everyday meaning only ban when directly addressed.
+
+    A permanent ban must be justified. "متخلف" (lagging), "كلب" (dog), "حمار"
+    (donkey), "زفت" (asphalt), "ساقط" (fallen), "وسخ" (dirty) … are perfectly
+    innocent on their own — but "يا X" / "انت X" is an unambiguous insult.
+    """
+    # Innocent standalone usages stay clean (no auto-ban).
+    for clean in [
+        "الصوت متخلف عن الفيديو", "التحميل متخلف شوية", "بوت متخلف في السرعة",
+        "عندي كلب في البيت", "الكلب حيوان أليف",
+        "شفت حمار في المزرعة", "الحمار الوحشي",
+        "الخنزير حيوان", "الطريق متغطي زفت",
+        "الكلمة ساقطة من النص", "الملابس وسخة", "سؤال تافه",
+        "عربية الزبالة", "العيش معفن", "الصوت واطي", "مستوى الصوت واطي",
+        "الملابس نجسة", "دي معلومة عادية",
+    ]:
+        assert not contains_profanity(clean), clean
+
+    # The SAME words addressed to someone are clear insults and still ban.
+    for insult in [
+        "يا كلب", "انت كلب", "يا حمار", "انت حمار", "يا خنزير", "انت متخلف",
+        "يا متخلف", "انت عبيط", "يا وسخ", "انت واطي", "يا ساقط", "يا حقير",
+    ]:
+        assert contains_profanity(insult), insult
 
 
 def test_normalization_variants():

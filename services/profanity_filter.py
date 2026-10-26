@@ -297,7 +297,8 @@ _AR_PHRASES = [
     "انيك امك", "انيك اختك", "على كسمك", "امك في طيزي", "اختك في طيزي",
 ]
 
-# Long, unambiguous slurs — matched as compact substrings.
+# Long, unambiguous slurs — matched as compact substrings. Kept strictly to
+# words with NO innocent everyday meaning, so an auto-ban is always justified.
 _AR_STRONG = [
     # جنسية
     "شرموط", "شرموطه", "شراميط", "شراميت",
@@ -313,28 +314,25 @@ _AR_STRONG = [
     "ديوث", "دياثه", "قواد", "قواده", "معرص", "معرصه",
     # أعضاء (الطويلة غير الملبسة)
     "طيزه", "طيزك", "طياز", "طيوز",
-    # إهانات
-    "حمار", "خنزير", "خنازير",
-    "احمق", "معتوه", "معتوهه", "متخلف", "متخلفه", "عبيط", "عبيطه",
+    # إهانات لا لبس فيها (مفيش معنى عادي تاني)
+    "احمق", "معتوه", "معتوهه",
     "مقرف", "مقرفه", "منحط", "منحطه", "بضان", "بظين",
-    "نذل", "نذله", "دنيء", "دنيئه", "سافل", "سافله", "واطي", "واطيه",
-    "معفن", "معفنه",
+    "نذل", "نذله", "دنيء", "دنيئه", "سافل", "سافله",
 ]
 
 # Short / ambiguous terms — whole-token only (plus exact compact match for the
 # letter-spacing dodge "ك س"). These are the words that MUST NOT be substring
-# matched: "تحقير" contains "حقير", "مخول" contains "خول", "كسوف" contains
-# "كس", "مونيكا" contains "نيك".
+# matched: "مخول" contains "خول", "كسوف" contains "كس", "مونيكا" contains
+# "نيك". ("حقير"/"كلب"/"متخلف" etc. live in _AR_DUAL below for the same reason
+# — they are likewise never substring-matched.)
 _AR_EXACT = {
     "زب", "زبي", "زبك", "زبر", "زبره", "اير", "ايري", "ايرك", "عير", "عيري",
     "كس", "كسي", "كسم", "كسمك", "كسمه",
     "نيك", "نيج", "نيجه", "احا", "احه",
     "عرص", "عرصه", "خول", "خوال", "خولات", "خوله",
-    "كلب", "كلاب", "كلبه", "طيز", "طيزي",
-    "غبي", "غبيه", "اهبل", "ابله", "هبله", "هبيل", "بليد", "بليده",
-    "وسخ", "وسخه", "نجس", "نجسه", "قذر", "قذره", "حقير", "حقيره",
-    "زباله", "تافه", "تافهه", "جبان", "جبانه", "تفو", "زفت", "خرا", "خره",
-    "خراء", "ساقط", "ساقطه", "حمير",
+    "طيز", "طيزي",
+    "غبي", "غبيه", "اهبل", "ابله", "هبله", "هبيل",
+    "جبان", "جبانه", "تفو", "خرا", "خره", "خراء",
 }
 
 # Long, unambiguous Arabic slurs safe to fuzzy-match (a single substituted
@@ -342,10 +340,38 @@ _AR_EXACT = {
 # ("منيك" ~ "منيح", "عاهره" ~ "عاهده") so fuzzy never false-positives.
 _AR_FUZZY = frozenset({
     "شرموط", "شرموطه", "شراميط", "منيوك", "منيوكه", "متناك", "متناكه",
-    "منتاك", "منتاكه", "نايك", "نايكه", "نياك", "نياكه", "خنزير", "خنازير",
-    "معرصه", "ديوث", "قواد", "متخلف", "مقرف", "عبيط", "معتوه", "بضان",
-    "احمق", "نذل", "دنيء", "سافل", "واطي",
+    "منتاك", "منتاكه", "نايك", "نايكه", "نياك", "نياكه",
+    "معرصه", "ديوث", "قواد", "مقرف", "معتوه", "بضان",
+    "احمق", "نذل", "دنيء", "سافل",
 })
+
+# Dual-meaning words: they carry a perfectly normal, everyday sense ("حمار" =
+# donkey, "كلب" = dog, "متخلف" = lagging/backward, "زفت" = asphalt, "ساقط" =
+# fallen/dropped, "بليد" = blunt, …). Banning on a standalone occurrence is
+# NOT justified, so these are profanity ONLY when directly addressed to the
+# recipient via a vocative/2nd-person particle ("يا حمار", "انت متخلف").
+_AR_DUAL = {
+    "حمار", "حمير",
+    "كلب", "كلاب", "كلبه",
+    "خنزير", "خنازير",
+    "متخلف", "متخلفه", "متخلفين",
+    "عبيط", "عبيطه",
+    "بليد", "بليده",
+    "وسخ", "وسخه",
+    "نجس", "نجسه",
+    "قذر", "قذره",
+    "زباله",
+    "تافه", "تافهه",
+    "زفت",
+    "ساقط", "ساقطه",
+    "معفن", "معفنه",
+    "واطي", "واطيه",
+    "حقير", "حقيره",
+}
+
+# Vocative / 2nd-person-address particles (post-normalization). "ي" is
+# intentionally absent — it merges with innocent prefixes like "ياكل"/"يجي".
+_AR_ADDRESS = frozenset({"يا", "انت", "انته", "انتي", "ايها"})
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +395,7 @@ _EN_PHRASES = [
 ]
 
 _EN_STRONG = [
-    "fuck", "fck", "fcuk", "fock", "fuk", "fuq",
+    "fuck",
     "fucking", "fuckin", "fucker", "fuckers", "fucked",
     "motherfucker", "motherfuckers", "motherfucking", "muthafucka",
     "muthafuckas", "mothafucka", "muthafuckin", "mofucka",
@@ -393,6 +419,8 @@ _EN_EXACT = {
     "thot", "thots", "fag", "fags", "prick", "twat", "twats", "wanker",
     "wankers", "bollocks", "bollock", "bellend", "nonce", "fuk", "fuq",
     "sht", "dik",
+    # typo-dodges (whole-token only so "fukuoka"/"focke" stay clean)
+    "fck", "fcuk", "fock",
 }
 
 # English is covered by a large explicit lexicon + leet; fuzzy is disabled so
@@ -518,6 +546,8 @@ _AR_PHRASES_C = [_rc2(_compactify(p, _ARABIC_COMPACT)) for p in _AR_PHRASES]
 _AR_STRONG_C = [_rc2(w) for w in _AR_STRONG]
 _AR_EXACT_C = {_rc2(w) for w in _AR_EXACT}
 _AR_FUZZY_C = frozenset(_rc2(w) for w in _AR_FUZZY)
+_AR_DUAL_C = frozenset(_rc2(w) for w in _AR_DUAL)
+_AR_ADDRESS_C = frozenset(_rc2(w) for w in _AR_ADDRESS)
 
 _FRANCO_PHRASES_C = [_rc2(_compactify(p, _FRANCO_COMPACT)) for p in _FRANCO_PHRASES]
 _FRANCO_STRONG_C = [_rc2(w) for w in _FRANCO_STRONG]
@@ -541,15 +571,34 @@ def _substring_hit(phrases_c, strong, compact: str) -> bool:
     return False
 
 
+def _dually_addressed_hit(tokens: list[str]) -> bool:
+    """A dual-meaning word counts as profanity ONLY when directly addressed.
+
+    Standalone "كلب" (dog) / "متخلف" (lagging) / "حمار" (donkey) stays clean —
+    a permanent ban is not justified for those. "يا كلب" / "انت متخلف" is an
+    unambiguous insult aimed at the recipient, so it fires.
+    """
+    if not _AR_DUAL_C:
+        return False
+    addr = _AR_ADDRESS_C
+    for i, tok in enumerate(tokens):
+        if tok in _AR_DUAL_C and i > 0 and tokens[i - 1] in addr:
+            return True
+    return False
+
+
 def _match_arabic(spaced: str, compact: str) -> bool:
     if _substring_hit(_AR_PHRASES_C, _AR_STRONG_C, compact):
         return True
-    tokens = set(spaced.split())
-    if any(w in tokens for w in _AR_EXACT_C):
+    tokens = spaced.split()
+    token_set = set(tokens)
+    if any(w in token_set for w in _AR_EXACT_C):
         return True
     if bool(compact) and compact in _AR_EXACT_C:
         return True
-    return _fuzzy_hit(tokens, _AR_FUZZY_C, 5)
+    if _dually_addressed_hit(tokens):
+        return True
+    return _fuzzy_hit(token_set, _AR_FUZZY_C, 5)
 
 
 def _match_english(spaced: str, compact: str) -> bool:
