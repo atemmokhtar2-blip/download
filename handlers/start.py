@@ -190,14 +190,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome_text = t("ar", "welcome_back") + ref_note
     elif first_welcome_due:
         welcome_text = (
-            "〆 𝑿𝑬𝑳𝑽𝑶𝑹\\n\\n"
-            "كل لحظة تستحق الاحتفاظ بها.\\n\\n"
+            "〆 𝑿𝑬𝑳𝑽𝑶𝑹\n\n"
+            "كل لحظة تستحق الاحتفاظ بها.\n\n"
             "فيديو، مقطع صوتي، أو محتوى عجبك على الإنترنت — ابعت رابطه، وخلي الوصول إليه أسهل."
         )
     else:
         welcome_text = (
-            "〆 𝑿𝑬𝑳𝑽𝑶𝑹\\n\\n"
-            "أهلاً بعودتك!\\n"
+            "〆 𝑿𝑬𝑳𝑽𝑶𝑹\n\n"
+            "أهلاً بعودتك!\n"
             "ابعت الرابط، وسيب الباقي عليّ."
         )
     await update.message.reply_text(
