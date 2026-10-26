@@ -21,6 +21,21 @@ class PlatformEngine:
     name = "Generic"
     domains: tuple[str, ...] = ()
 
+    # Self-describing metadata: each engine declares the DISTINCT techniques it
+    # uses and which media types it can deliver. Surfaced by describe() and by
+    # the dashboard (list_engines) so the per-platform strategy is never a guess.
+    techniques: tuple[str, ...] = ()
+    capabilities: frozenset[str] = frozenset()
+
+    def describe(self) -> dict:
+        """Stable, JSON-friendly summary of this engine's strategy."""
+        return {
+            "name": self.name,
+            "domains": self.domains,
+            "techniques": list(self.techniques),
+            "capabilities": sorted(self.capabilities),
+        }
+
     def matches(self, url: str) -> bool:
         """Return True when the URL host belongs to this engine.
 
