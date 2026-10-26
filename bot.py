@@ -36,6 +36,10 @@ from handlers.referral import (
     referral_callback, try_handle_code_message, try_handle_token_message,
 )
 from handlers.owner_panel import owner_command, owner_callback, owner_text_handler, warroom_command
+from handlers.contact_admin import (
+    contact_admin_callback, contact_fallback, media_message_router,
+    try_handle_admin_reply,
+)
 from services.subscription_gate import subscription_check_callback
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache, cleanup_old_history, clone_expiry_worker
 
@@ -207,6 +211,12 @@ async def message_router(update: Update, context):
         return
     text = message.text.strip()
 
+    # Admin → user reply routing for the "رسالة إلى الأدمن" flow. A reply to a
+    # forwarded contact message is copied back verbatim and never falls through
+    # to download/contact handling.
+    if await try_handle_admin_reply(update, context):
+        return
+
     # Secure clone-token capture runs FIRST: while a user is in the
     # awaiting-token state, any text they send is treated as the token,
     # deleted immediately, and never routed anywhere else. The redemption
@@ -282,6 +292,10 @@ async def message_router(update: Update, context):
         await handle_batch_urls(update, context)
     elif urls:
         await handle_url(update, context)
+    else:
+        # No download link → normal message. Ask the user to confirm before it
+        # is forwarded to the admin (profanity is filtered before forwarding).
+        await contact_fallback(update, context, update.effective_user, message)
 
 
 def _make_post_init(is_clone: bool):
@@ -405,9 +419,22 @@ def build_application(token: str | None = None, clone: bool = False) -> Applicat
     app.add_handler(CallbackQueryHandler(settings_callback, pattern="^settings"))
     app.add_handler(CallbackQueryHandler(search_callback, pattern="^search_"))
     app.add_handler(CallbackQueryHandler(download_callback, pattern="^dl_"))
+    app.add_handler(CallbackQueryHandler(contact_admin_callback, pattern="^contact_"))
     app.add_handler(CallbackQueryHandler(unknown_callback))
     app.add_handler(InlineQueryHandler(inline_search))
 
+    # Media content (photo/video/document/voice/audio/video-note) — previously
+    # had no handler and was ignored. Now routed to the same contact-confirmation
+    # flow, with caption download links keeping their priority.
+    media_filter = (
+        filters.PHOTO
+        | filters.VIDEO
+        | filters.Document.ALL
+        | filters.VOICE
+        | filters.AUDIO
+        | filters.VIDEO_NOTE
+    )
+    app.add_handler(MessageHandler(media_filter, media_message_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
     app.add_error_handler(global_error_handler)
     return app

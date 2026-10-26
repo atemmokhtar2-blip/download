@@ -9,6 +9,13 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "7631249810").split(",") if x.strip().isdigit()]
 OWNER_ID = int(os.getenv("OWNER_ID", "7631249810")) if os.getenv("OWNER_ID", "7631249810").isdigit() else 7631249810
 
+# Where "رسالة إلى الأدمن" contact content is forwarded. Defaults to the owner;
+# override with CONTACT_ADMIN_ID to point elsewhere (e.g. a support account).
+_CONTACT_ADMIN_RAW = os.getenv("CONTACT_ADMIN_ID", "").strip()
+CONTACT_ADMIN_ID = int(_CONTACT_ADMIN_RAW) if _CONTACT_ADMIN_RAW.isdigit() else OWNER_ID
+# Master switch for the confirmation-first "رسالة إلى الأدمن" flow.
+CONTACT_ADMIN_ENABLED = os.getenv("CONTACT_ADMIN_ENABLED", "1") == "1"
+
 # PostgreSQL is the ONE and ONLY database backend. The DSN is resolved in
 # database/pg.py from NEON_DATABASE_URL / POSTGRES_URL / DATABASE_URL
 # (postgres:// prefix) and MUST be set — without it the bot fails loudly at
