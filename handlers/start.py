@@ -11,6 +11,29 @@ from services.instance_manager import is_clone_bot
 
 logger = logging.getLogger(__name__)
 
+START_RETURN_GREETINGS = (
+    "أهلاً بعودتك!\nابعت الرابط، وسيب الباقي عليّ.",
+    "نورت 𝑿𝑬𝑳𝑽𝑶𝑹 من جديد.\nجاهز؟ ابعت اللي عايز تحمّله.",
+    "رجعت تاني؟ المكان مكانك.\nهات الرابط وأنا أبدأ.",
+    "كل مرة بنسهّلها عليك أكتر.\nابعت رابط المحتوى وخلاص.",
+    "أهلاً بيك من جديد.\nالفيديو أو الصوت اللي في بالك؟ ابعت رابطه.",
+    "موجودين عشان نسهّلها عليك.\nابعت الرابط وسيب الباقي علينا.",
+    "يا أهلاً بالعودة!\nرابط واحد، والباقي علينا.",
+    "جاهز تحفظ حاجة عجبتك؟\nابعت الرابط ونكمل سوا.",
+    "نورت البوت تاني.\nاختار المحتوى اللي عايزه وابعت رابطه.",
+    "رجوعك يسعدنا.\nابعت رابط الفيديو أو الصوت اللي محتاجه.",
+    "خلّي الوصول للمحتوى أسهل.\nابعت الرابط هنا.",
+    "أهلاً بيك في أي وقت.\nابعت الرابط وهنساعدك في الباقي.",
+    "𝑿𝑬𝑳𝑽𝑶𝑹 جاهز لك.\nإيه الرابط اللي هنشتغل عليه النهارده؟",
+    "رجعنا نكمّل!\nابعت رابط المحتوى اللي عايز تحتفظ بيه.",
+    "بسيطة زي كل مرة.\nابعت الرابط وابدأ.",
+    "أهلاً بعودتك للمكان الصح.\nحط الرابط هنا وخلي الباقي علينا.",
+    "محتوى عجبك؟ خليه معاك.\nابعت رابطه وهنبدأ.",
+    "نورت من جديد.\nمن تيك توك أو يوتيوب أو غيرهم، ابعت الرابط.",
+    "كل اللي محتاجه إنك تبعت الرابط.\nسيب خطوات التنزيل علينا.",
+    "رجعت؟ يبقى نبدأ على طول.\nابعت رابطك هنا."
+)
+
 
 def get_main_keyboard(lang: str = "ar", user_id: int = None, bot_username: str = None) -> ReplyKeyboardMarkup:
     """Permanent Arabic shortcuts: Download + Settings.
@@ -195,11 +218,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "فيديو، مقطع صوتي، أو محتوى عجبك على الإنترنت — ابعت رابطه، وخلي الوصول إليه أسهل."
         )
     else:
-        welcome_text = (
-            "〆 𝑿𝑬𝑳𝑽𝑶𝑹\n\n"
-            "أهلاً بعودتك!\n"
-            "ابعت الرابط، وسيب الباقي عليّ."
-        )
+        try:
+            from database.onboarding import next_start_greeting_index
+            greeting_index = next_start_greeting_index(
+                user.id, len(START_RETURN_GREETINGS)
+            )
+        except Exception:
+            # Keep /start available if greeting-state persistence has a temporary issue.
+            logger.exception("Could not rotate start greeting uid=%s", user.id)
+            greeting_index = 0
+        welcome_text = "〆 𝑿𝑬𝑳𝑽𝑶𝑹\n\n" + START_RETURN_GREETINGS[greeting_index]
     await update.message.reply_text(
         welcome_text,
         parse_mode="HTML" if not custom_welcome else None,
