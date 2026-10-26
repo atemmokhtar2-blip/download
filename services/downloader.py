@@ -226,7 +226,7 @@ YOUTUBE_PLAYER_CLIENTS = {
     "tv", "tv_embedded", "tv_simply", "web",
     "web_creator", "web_embedded", "web_music", "web_safari",
     # Present in newer yt-dlp builds; harmless when not selected by our ladder.
-    "tv_downgraded", "visionos",
+    "tv_downgraded", "tv_samsung", "visionos",
 }
 
 
