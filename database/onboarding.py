@@ -18,7 +18,6 @@ def ensure_onboarding_schema() -> None:
 
 def mark_help_pending(user_id: int) -> None:
     """Remember that a new user's first-run guide is due after subscription."""
-    ensure_onboarding_schema()
     with db_cursor() as cursor:
         cursor.execute("""
             INSERT INTO user_onboarding (user_id, help_pending, help_shown)
@@ -28,7 +27,6 @@ def mark_help_pending(user_id: int) -> None:
 
 
 def help_is_pending(user_id: int) -> bool:
-    ensure_onboarding_schema()
     with db_cursor() as cursor:
         cursor.execute(
             "SELECT help_pending, help_shown FROM user_onboarding WHERE user_id = ?",
@@ -40,7 +38,6 @@ def help_is_pending(user_id: int) -> bool:
 
 def mark_help_shown(user_id: int) -> None:
     """Persist that the one-time guide invitation was successfully sent."""
-    ensure_onboarding_schema()
     with db_cursor() as cursor:
         cursor.execute("""
             UPDATE user_onboarding
