@@ -192,6 +192,7 @@ def build_home(settings: dict, is_clone: bool = False) -> tuple[str, list]:
         [("🔵 📚 سجل التحميلات", "settings:history")],
         [("🔵 🔒 الخصوصية والمساحة", "settings:privacy")],
         [("🔵 🔔 الإشعارات", "settings:notify")],
+        [("📖 شرح البوت بالكامل", "settings:guide")],
         [("🔴 ♻️ إعادة ضبط الإعدادات", "settings:reset")],
         [("🔴 ❌ إغلاق", "settings:close")],
     ]
@@ -558,6 +559,17 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.delete()
         except Exception:
             pass
+        return
+
+    if data == "settings:guide":
+        from handlers.help_guide import HOME, _home_markup
+        await safe_edit(
+            query.edit_message_text,
+            HOME,
+            parse_mode="HTML",
+            reply_markup=_home_markup(uid),
+            disable_web_page_preview=True,
+        )
         return
 
     # 🎁 Referral center — its own async module (pages, reward claim, and the
