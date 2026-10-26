@@ -61,6 +61,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             language="ar",
         )
         db_user = get_user(user.id)
+        # Persist a pending first-run guide before subscription enforcement.
+        # If the user has not joined the required channel yet, the invitation
+        # remains pending and is delivered after a later successful /start.
+        try:
+            from database.onboarding import mark_help_pending
+            mark_help_pending(user.id)
+        except Exception:
+            logger.exception("Could not register first-run help uid=%s", user.id)
 
     # Force Arabic for both new and existing users, including accounts that
     # previously selected English.
@@ -172,6 +180,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML" if not custom_welcome else None,
         reply_markup=build_main_keyboard(context, user.id),
     )
+
+    # The guide invitation is a one-time inline message, not a permanent menu
+    # button. Its state is persisted in PostgreSQL and marked shown only after
+    # Telegram confirms the invitation message was sent successfully.
+    try:
+        from database.onboarding import help_is_pending, mark_help_shown
+        if help_is_pending(user.id):
+            from handlers.help_guide import help_guide_markup
+            await update.message.reply_text(
+                "قبل ما تبدأ، تقدر تتعرف على مميزات البوت وطريقة استخدام كل قسم.",
+                reply_markup=help_guide_markup(user.id),
+            )
+            mark_help_shown(user.id)
+    except Exception:
+        logger.exception("One-time help invitation failed uid=%s", user.id)
 
     # The promotion/back-to-main link is intentionally NOT sent in the
     # welcome flow. Basic clones show the single "اصنع بوتك الخاص" link
