@@ -299,6 +299,8 @@ def init_db():
     ensure_owner_schema()
     from .subscription import ensure_subscription_schema
     ensure_subscription_schema()
+    from .onboarding import ensure_onboarding_schema
+    ensure_onboarding_schema()
 
 
 def ensure_owner_schema():
