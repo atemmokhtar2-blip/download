@@ -47,3 +47,26 @@ def test_short_terms_require_whole_word():
 def test_normalize_is_stable():
     assert normalize_profanity_text("شَرْمُوْط") == "شرموط"
     assert normalize_profanity_text("كس-أمك") == "كس امك"
+
+
+def test_franco_arabizi_blocked():
+    for text in [
+        "kosomak", "kosomk", "ks mk", "kos omak", "7mar", "5ara", "9a7ba",
+        "qa7ba", "sharmota", "sharmoota", "khawal", "5wal", "manyak", "metnak",
+        "tez", "zeb", "neek", "a7a", "ya 5wal", "dayouth",
+    ]:
+        assert contains_profanity(text), text
+
+
+def test_english_leet_blocked():
+    for text in ["f.u.c.k", "f*ck", "sh1t", "b!tch", "@ss", "fck", "fuuuck", "stfu"]:
+        assert contains_profanity(text), text
+
+
+def test_strong_still_avoids_false_positives():
+    for text in [
+        "class and grass and glass",
+        "تحقير", "تحقير الذات",
+        "abdan", "ahmar", "kombucha", "document", "vacuum", "zebra",
+    ]:
+        assert not contains_profanity(text), text
