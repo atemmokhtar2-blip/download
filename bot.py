@@ -22,6 +22,7 @@ from handlers.start import (
     start_command, language_callback,
     help_command,
 )
+from handlers.help_guide import help_guide_callback
 from handlers.settings_menu import settings_command, settings_callback, try_handle_settings_text
 from handlers.download import (
     handle_url, download_callback, handle_batch_urls, _extract_urls
@@ -420,6 +421,7 @@ def build_application(token: str | None = None, clone: bool = False) -> Applicat
     app.add_handler(CallbackQueryHandler(search_callback, pattern="^search_"))
     app.add_handler(CallbackQueryHandler(download_callback, pattern="^dl_"))
     app.add_handler(CallbackQueryHandler(contact_admin_callback, pattern="^contact_"))
+    app.add_handler(CallbackQueryHandler(help_guide_callback, pattern="^guide:"))
     app.add_handler(CallbackQueryHandler(unknown_callback))
     app.add_handler(InlineQueryHandler(inline_search))
 
