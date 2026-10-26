@@ -226,9 +226,14 @@ def _http_get(url: str, headers: dict | None = None, timeout: int = 20):
     }
     if headers:
         hdrs.update(headers)
-    sid = _sessionid()
-    if sid:
-        hdrs["Cookie"] = f"sessionid={sid};"
+    # Send the FULL auth cookie jar (INSTAGRAM_SESSIONID + cookies.txt) so a
+    # login-gated GraphQL/embed/public-API response does not 403-on-ask. This is
+    # the same identity the direct-CDN download uses, keeping resolve and fetch
+    # consistent — before this, cookies.txt only reached the CDN fetch, never
+    # the resolvers that actually discover the media.
+    cookie = _cookie_header()
+    if cookie:
+        hdrs["Cookie"] = cookie
     try:
         resp = tls.get(url, headers=hdrs, timeout=timeout)
         if resp is not None:

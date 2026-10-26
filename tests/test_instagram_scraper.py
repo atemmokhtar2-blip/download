@@ -48,6 +48,22 @@ def test_direct_download_headers_carry_referer_and_origin_only_by_default():
     assert not h.get("Cookie")
 
 
+def test_cookie_header_propagates_sessionid():
+    # The resolver cookie jar is shared with the direct-CDN fetch. A configured
+    # sessionid must surface in BOTH — this is the fix that stops login-gated
+    # posts from being resolved as anonymous and then failing on the CDN.
+    import os
+    prev = os.environ.get("INSTAGRAM_SESSIONID")
+    os.environ["INSTAGRAM_SESSIONID"] = "mock_sess_abc"
+    try:
+        assert "sessionid=mock_sess_abc" in ig._cookie_header()
+    finally:
+        if prev is None:
+            os.environ.pop("INSTAGRAM_SESSIONID", None)
+        else:
+            os.environ["INSTAGRAM_SESSIONID"] = prev
+
+
 def test_node_to_result_video_parses_duration_and_owner():
     node = {
         "is_video": True,
@@ -71,5 +87,6 @@ if __name__ == "__main__":
     test_extract_shortcode_variants()
     test_private_or_login_html_detection()
     test_direct_download_headers_carry_referer_and_origin_only_by_default()
+    test_cookie_header_propagates_sessionid()
     test_node_to_result_video_parses_duration_and_owner()
     print("instagram scraper tests passed")
