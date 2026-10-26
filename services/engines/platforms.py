@@ -67,7 +67,8 @@ from services.engines.direct import (  # noqa: F401
     PeerTubeEngine,
 )
 from services.engines.generic import (  # noqa: F401
-    EmbedFallbackEngine, GenericEngine, UniversalEngine, YtDlpFallbackEngine,
+    AudioFallbackEngine, EmbedFallbackEngine, GenericEngine, UniversalEngine,
+    YtDlpFallbackEngine,
 )
 from services.engines.major import (  # noqa: F401
     FacebookEngine, InstagramEngine, PinterestEngine, RedditEngine, TikTokEngine,
@@ -85,6 +86,7 @@ __all__ = [
     "SoundCloudEngine",
     "SpotifyEngine",
     "YtDlpFallbackEngine",
+    "AudioFallbackEngine",
     "EmbedFallbackEngine",
     "GenericEngine",
     "UniversalEngine",

@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import os
 from typing import Callable
-
-from config.settings import AUDIO_BITRATE, TEMP_DIR
-from utils.helpers import sanitize_filename
 
 from services.engines.base import PlatformEngine
 from utils.logger import download_logger, error_logger

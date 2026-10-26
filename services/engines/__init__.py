@@ -14,7 +14,7 @@ from services.engines.direct import (
     TVerEngine, TwitchEngine, VimeoEngine, VkEngine, WeiboEngine, XiaohongshuEngine,
     YoukuEngine,
 )
-from services.engines.generic import GenericEngine, UniversalEngine
+from services.engines.generic import UniversalEngine
 from services.engines.major import (
     FacebookEngine, InstagramEngine, PinterestEngine, RedditEngine, TikTokEngine,
     TwitterEngine, YouTubeEngine,
@@ -67,6 +67,7 @@ def list_engines() -> list[dict]:
         "name": "UniversalEngine",
         "status": "ready",
         "domains": "any",
+        "techniques": list(UniversalEngine.techniques),
         "note": "أي منصة يدعمها yt-dlp (1000+)",
     })
     return rows
