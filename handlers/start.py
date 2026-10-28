@@ -228,11 +228,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.exception("Could not rotate start greeting uid=%s", user.id)
             greeting_index = 0
         welcome_text = "〆 𝑿𝑬𝑳𝑽𝑶𝑹\n\n" + START_RETURN_GREETINGS[greeting_index]
-    await update.message.reply_text(
-        welcome_text,
-        parse_mode="HTML" if not custom_welcome else None,
-        reply_markup=build_main_keyboard(context, user.id),
-    )
+    # Send the branded XELVOR artwork with the welcome message.
+    from pathlib import Path
+    with (Path(__file__).resolve().parent.parent / "assets" / "xelvor.jpg").open("rb") as welcome_photo:
+        await update.message.reply_photo(
+            photo=welcome_photo,
+            caption=welcome_text,
+            parse_mode="HTML" if not custom_welcome else None,
+            reply_markup=build_main_keyboard(context, user.id),
+        )
 
     # The guide invitation is a one-time inline message, not a permanent menu
     # button. Its state is persisted in PostgreSQL and marked shown only after
