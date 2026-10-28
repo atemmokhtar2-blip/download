@@ -88,6 +88,21 @@ async def _final_edit(edit_fn, text, **kwargs):
     kwargs["reply_markup"] = EMPTY_MARKUP
     return await _quiet_edit(edit_fn, text, **kwargs)
 
+async def _finish_success_card(status_message, edit_fn, lang):
+    """Remove the analysis/progress card after successful media delivery.
+
+    The card may be a thumbnail photo with a caption. Leaving it in the chat
+    makes users see an extra image plus the actual downloaded media. Delete it
+    on success; retain the old confirmation as a fallback only if Telegram
+    refuses deletion.
+    """
+    try:
+        await status_message.delete()
+        return True
+    except TelegramError:
+        await _final_edit(edit_fn, t(lang, "sent"))
+        return False
+
 
 # Telegram rejects edit floods; keep live progress updates at a human-readable
 # cadence while every phase transition stays instant (first edit after the
@@ -1044,9 +1059,10 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 is_audio, is_image, is_album, ui,
                                 audio_bitrate=audio_bitrate, delivery_mode=delivery_mode,
                                 settings=settings)
-        # Delivery finished: confirm on the status card and drop the 🛑 button
-        # so a stale press can never flag the NEXT download.
-        await _final_edit(edit_fn, t(lang, "sent"))
+        # On success, remove the original thumbnail/action card so the chat
+        # contains only the media the user requested (not a second image/card).
+        # Deleting also removes the stale 🛑 control.
+        await _finish_success_card(progress_msg, edit_fn, lang)
     except DownloadCancelledError:
         logger.info("Download cancelled by user=%s url=%s", user.id, str(info.get("url", ""))[:120])
         await _final_edit(edit_fn, t(lang, "download_cancelled"))
