@@ -129,21 +129,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("Referral registration failed uid=%s", user.id)
 
-    # Panels appear ONLY for privileged accounts — regular users never see
-    # any panel button or screen, anywhere in the bot.
-    #   * OWNER (you)      → the Owner Control Center opens immediately on /start.
-    #   * regular admin    → the admin panel opens immediately on /start.
-    # FULL ISOLATION: main-bot panels NEVER open inside a clone. Inside a
-    # clone even the global owner/admin is served the normal clone flow —
-    # if they own/admin THIS clone, their own panel arrives via the
-    # keyboard row + the auto-appointment note below.
+    # Main-bot owner/admin flows return early, so send the brand image before
+    # opening their control panel as well. Regular users receive it with welcome below.
     if not is_clone_bot(context.bot.username or ""):
-        if is_owner(user.id):
-            from handlers.owner_panel import owner_command  # local import: avoids a circular dependency
-            await owner_command(update, context)
-            return
-
-        if is_admin(user.id):
+        if is_owner(user.id) or is_admin(user.id):
+            from pathlib import Path
+            photo_path = Path(__file__).resolve().parent.parent / "assets" / "xelvor.jpg"
+            try:
+                with photo_path.open("rb") as welcome_photo:
+                    await update.message.reply_photo(photo=welcome_photo, caption="〆 𝑿𝑬𝑳𝑽𝑶𝑹")
+            except Exception:
+                logger.exception("Could not send XELVOR start image path=%s", photo_path)
+            if is_owner(user.id):
+                from handlers.owner_panel import owner_command  # local import: avoids a circular dependency
+                await owner_command(update, context)
+                return
             from handlers.admin import admin_command  # local import: avoids a circular dependency
             await admin_command(update, context)
             return
