@@ -137,8 +137,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo_path = Path(__file__).resolve().parent.parent / "assets" / "xelvor.png"
             try:
                 with photo_path.open("rb") as welcome_photo:
-                    await update.message.reply_photo(
-                        photo=welcome_photo,
+                    await update.message.reply_document(
+                        document=welcome_photo,
                         caption="〆 𝑿𝑬𝑳𝑽𝑶𝑹",
                     )
             except Exception:
@@ -234,8 +234,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send the branded XELVOR artwork with the welcome message.
     from pathlib import Path
     with (Path(__file__).resolve().parent.parent / "assets" / "xelvor.png").open("rb") as welcome_photo:
-        await update.message.reply_photo(
-            photo=welcome_photo,
+        await update.message.reply_document(
+            document=welcome_photo,
             caption=welcome_text,
             parse_mode="HTML" if not custom_welcome else None,
             reply_markup=build_main_keyboard(context, user.id),
