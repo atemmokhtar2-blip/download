@@ -21,6 +21,7 @@ from handlers.download import (  # noqa: E402
     _ProgressUI,
     _format_eta,
     _final_edit,
+    _finish_success_card,
     EMPTY_MARKUP,
 )
 from middlewares.cancellation import (  # noqa: E402
@@ -211,6 +212,37 @@ def test_final_edit_removes_cancel_markup() -> None:
     rec = _Recorder()
     _run(_final_edit(rec, "done"))
     assert rec.calls[0]["kwargs"]["parse_mode"] == "HTML"
+    assert rec.calls[0]["kwargs"]["reply_markup"] is EMPTY_MARKUP
+
+
+# --------------------------------------------- remove duplicate success card
+def test_success_deletes_thumbnail_or_progress_card() -> None:
+    class _StatusMessage:
+        def __init__(self):
+            self.deleted = False
+
+        async def delete(self):
+            self.deleted = True
+
+    message = _StatusMessage()
+    rec = _Recorder()
+    _run(_finish_success_card(message, rec, "en"))
+
+    assert message.deleted is True
+    assert rec.calls == []
+
+
+def test_success_card_falls_back_to_confirmation_if_delete_fails() -> None:
+    from telegram.error import TelegramError
+
+    class _UndeletableMessage:
+        async def delete(self):
+            raise TelegramError("cannot delete")
+
+    rec = _Recorder()
+    _run(_finish_success_card(_UndeletableMessage(), rec, "en"))
+
+    assert len(rec.calls) == 1
     assert rec.calls[0]["kwargs"]["reply_markup"] is EMPTY_MARKUP
 
 
