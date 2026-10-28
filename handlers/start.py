@@ -137,7 +137,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo_path = Path(__file__).resolve().parent.parent / "assets" / "xelvor.jpg"
             try:
                 with photo_path.open("rb") as welcome_photo:
-                    await update.message.reply_photo(photo=welcome_photo, caption="〆 𝑿𝑬𝑳𝑽𝑶𝑹")
+                    await update.message.reply_document(
+                        document=welcome_photo,
+                        filename="xelvor.jpg",
+                        caption="〆 𝑿𝑬𝑳𝑽𝑶𝑹",
+                    )
             except Exception:
                 logger.exception("Could not send XELVOR start image path=%s", photo_path)
             if is_owner(user.id):
@@ -231,8 +235,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send the branded XELVOR artwork with the welcome message.
     from pathlib import Path
     with (Path(__file__).resolve().parent.parent / "assets" / "xelvor.jpg").open("rb") as welcome_photo:
-        await update.message.reply_photo(
-            photo=welcome_photo,
+        await update.message.reply_document(
+            document=welcome_photo,
+            filename="xelvor.jpg",
             caption=welcome_text,
             parse_mode="HTML" if not custom_welcome else None,
             reply_markup=build_main_keyboard(context, user.id),
