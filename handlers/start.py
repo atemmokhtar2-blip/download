@@ -134,7 +134,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_clone_bot(context.bot.username or ""):
         if is_owner(user.id) or is_admin(user.id):
             from pathlib import Path
-            photo_path = Path(__file__).resolve().parent.parent / "assets" / "xelvor.jpg"
+            photo_path = Path(__file__).resolve().parent.parent / "assets" / "xelvor.png"
             try:
                 with photo_path.open("rb") as welcome_photo:
                     await update.message.reply_photo(
@@ -233,7 +233,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome_text = "〆 𝑿𝑬𝑳𝑽𝑶𝑹\n\n" + START_RETURN_GREETINGS[greeting_index]
     # Send the branded XELVOR artwork with the welcome message.
     from pathlib import Path
-    with (Path(__file__).resolve().parent.parent / "assets" / "xelvor.jpg").open("rb") as welcome_photo:
+    with (Path(__file__).resolve().parent.parent / "assets" / "xelvor.png").open("rb") as welcome_photo:
         await update.message.reply_photo(
             photo=welcome_photo,
             caption=welcome_text,
