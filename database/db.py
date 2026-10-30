@@ -405,12 +405,18 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_support_msg  ON support_ticket_messages(ticket_id);
         """)
     logger.info("Database initialized on backend=%s", backend_name())
-    ensure_cache_schema()
-    ensure_owner_schema()
+    # Additive schema changes go through the versioned, tracked migration
+    # runner (database/migrations.py) so they run exactly once, in order, and
+    # are recorded in schema_migrations for auditability across restarts.
+    from .migrations import register, run_migrations
+
+    register("cache_schema", "file_cache fingerprint + vault + media fingerprint index", ensure_cache_schema)
+    register("owner_schema", "users ban_reason/banned_at + extra_admins + RBAC columns", ensure_owner_schema)
     from .subscription import ensure_subscription_schema
-    ensure_subscription_schema()
+    register("subscription_schema", "mandatory_channels subscription table", ensure_subscription_schema)
     from .onboarding import ensure_onboarding_schema
-    ensure_onboarding_schema()
+    register("onboarding_schema", "onboarding/reengagement/greeting tables", ensure_onboarding_schema)
+    run_migrations()
 
 
 def ensure_owner_schema():

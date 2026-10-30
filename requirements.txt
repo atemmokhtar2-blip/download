@@ -1,4 +1,8 @@
 gradio==5.49.1
+# Transitive dependency of Gradio (it imports huggingface_hub for HF Spaces /
+# model hosting features). Pinned <1.0 on purpose: Gradio 5.x is not yet
+# compatible with huggingface_hub 1.x, and letting it float would break the
+# Control Center UI. Do not remove or unpin without verifying Gradio works.
 huggingface_hub>=0.33.5,<1.0
 python-telegram-bot>=22.7,<23.0
 python-dotenv==1.0.1

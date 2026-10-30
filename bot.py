@@ -15,6 +15,7 @@ from telegram.ext import (
 
 from config.settings import BOT_TOKEN
 from database.db import init_db
+from database.async_helpers import arun
 from utils.logger import system_logger
 from utils.helpers import summarize_error
 
@@ -59,7 +60,7 @@ async def track_user_activity(update: Update, context):
     if user is None or chat is None or chat.type != "private" or user.is_bot:
         return
     try:
-        await asyncio.to_thread(record_user_activity, user.id)
+        await arun(record_user_activity, user.id)
     except Exception:
         # Activity tracking must never block normal bot interactions.
         system_logger.exception("Could not update inactivity timestamp uid=%s", user.id)
@@ -107,9 +108,9 @@ async def forced_subscription_guard(update: Update, context):
     if not context.application.bot_data.get("is_clone_instance", False):
         try:
             from middlewares.auth import is_admin
-            if not is_admin(user.id):
+            if not await arun(is_admin, user.id):
                 from database.interaction_abuse import active_ban_seconds
-                active_ban = active_ban_seconds(user.id)
+                active_ban = await arun(active_ban_seconds, user.id)
                 if active_ban > 0:
                     if query:
                         try:
@@ -145,7 +146,7 @@ async def forced_subscription_guard(update: Update, context):
                         reason = "download_menu"
                 if reason:
                     from database.interaction_abuse import check_repeated_action
-                    decision, remaining = check_repeated_action(user.id, reason)
+                    decision, remaining = await arun(check_repeated_action, user.id, reason)
                     if decision != "allow":
                         if query:
                             try:
@@ -260,9 +261,9 @@ async def message_router(update: Update, context):
     if norm in {normalize_button_text(b) for b in MENU_BUTTONS}:
         from database.users import get_user, update_user
         user_id = update.effective_user.id
-        db_user = get_user(user_id)
+        db_user = await arun(get_user, user_id)
         if db_user:
-            update_user(user_id, language="ar")
+            await arun(update_user, user_id, language="ar")
         download_btn = {
             normalize_button_text(t("ar", "menu_download")),
             normalize_button_text(t("en", "menu_download")),

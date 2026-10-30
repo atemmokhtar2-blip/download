@@ -367,13 +367,19 @@ def init_referral_schema() -> None:
                 c.execute(stmt)
             except Exception:
                 logger.debug("Index skipped: %s", stmt[:60])
-    ensure_reward_milestone_column()
-    ensure_instance_plan_columns()
-    ensure_redemption_targeted_user_column()
-    ensure_redemption_valid_hours_column()
-    ensure_clone_settings_migration()
-    ensure_plan_schema()
-    ensure_clone_users_migration()
+    # Additive schema changes go through the versioned, tracked migration
+    # runner so they run exactly once, in order, and are recorded in
+    # schema_migrations for auditability across restarts.
+    from .migrations import register, run_migrations
+
+    register("reward_milestone", "referral_rewards.notified_milestone", ensure_reward_milestone_column)
+    register("instance_plan_columns", "bot_instances.plan + expires_at", ensure_instance_plan_columns)
+    register("redemption_targeted_user", "redemption_codes.targeted_user_id", ensure_redemption_targeted_user_column)
+    register("redemption_valid_hours", "redemption_codes.valid_hours", ensure_redemption_valid_hours_column)
+    register("clone_settings_migration", "legacy bot_settings -> clone_settings", ensure_clone_settings_migration)
+    register("plan_schema", "clone plan tables + downloads.instance_id", ensure_plan_schema)
+    register("clone_users_migration", "backfill clone_users memberships", ensure_clone_users_migration)
+    run_migrations()
     logger.info("Referral schema ready on backend=%s", BACKEND)
 
 
