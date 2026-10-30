@@ -234,6 +234,21 @@ def _setup_module_checks() -> None:
     check("release after revoke works",
           redemption.release_reservation(6002, cid_pro, "user_cancelled") is True)
 
+    print("== hard delete (حذف الكود نهائيًا) ==")
+    del_res = redemption.create_code("basic", 30, 2, 30, created_by=OWNER)
+    cid_del = del_res["code_id"]
+    # A fresh code always carries a 'created' audit row — the hard delete must
+    # wipe both the code row AND its full trail, leaving no dangling pointer.
+    check("delete target exists before", redemption.get_code(cid_del) is not None)
+    ok_del, counts = redemption.delete_code(cid_del, by_owner=OWNER)
+    check("hard delete ok", ok_del is True)
+    check("hard delete removed the code row", redemption.get_code(cid_del) is None)
+    check("hard delete removed every audit row", len(_log_rows(cid_del)) == 0)
+    check("hard delete counts the code row", counts.get("redemption_codes") == 1)
+    ok_del2, counts2 = redemption.delete_code(cid_del, by_owner=OWNER)
+    check("hard delete again finds nothing", ok_del2 is False
+          and counts2.get("redemption_log") == 0)
+
     print("== expired code ==")
     exp_res = redemption.create_code("basic", 30, 1, 1, created_by=OWNER)
     cid_exp = exp_res["code_id"]

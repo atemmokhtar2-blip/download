@@ -282,6 +282,44 @@ def revoke_code(code_id: int, by_owner: int | None = None) -> tuple[bool, str]:
     return True, "revoked"
 
 
+def delete_code(code_id: int, by_owner: int | None = None) -> tuple[bool, dict]:
+    """PERMANENTLY erase a redemption code and its whole audit trail.
+
+    Owner-panel "حذف الكود نهائيًا". Unlike ``revoke_code`` (which keeps the
+    row and flips it to 'revoked'), this removes the ``redemption_codes`` row
+    AND every ``redemption_log`` row that references it — the code text, its
+    usage history and any revocation record are gone for good.
+
+    Children first, the code row LAST, so a mid-way failure can never leave a
+    code row whose history was already erased. Instances already created from
+    the code are NOT touched: they belong to their owners and keep running
+    independently — this delete only unwinds the code itself.
+
+    Returns ``(ok, counts)`` where ``ok`` is True when the code row was
+    actually deleted and ``counts`` reports affected rows per table; a
+    missing/already-deleted code returns ``(False, {...0})``.
+    """
+    cid = int(code_id)
+    if get_code(cid) is None:
+        return False, {"redemption_codes": 0, "redemption_log": 0}
+    counts: dict[str, int] = {}
+    try:
+        counts["redemption_log"] = pg.execute(
+            "DELETE FROM redemption_log WHERE code_id = ?", (cid,))
+    except Exception:
+        logger.exception("hard delete: redemption_log wipe failed code=%s", cid)
+        counts["redemption_log"] = -1
+    try:
+        counts["redemption_codes"] = pg.execute(
+            "DELETE FROM redemption_codes WHERE id = ?", (cid,))
+    except Exception:
+        logger.exception("hard delete: redemption_codes failed code=%s", cid)
+        counts["redemption_codes"] = -1
+    ok = counts.get("redemption_codes") == 1
+    logger.info("redemption code #%s hard-deleted by=%s: %s", cid, by_owner, counts)
+    return ok, counts
+
+
 # ---- reservation lifecycle ------------------------------------------------------
 
 def cleanup_orphan_pending_instances() -> int:

@@ -826,6 +826,46 @@ async def _code_revoke_do(query, code_id: int):
                 ]))
 
 
+async def _code_delete_confirm(query, code_id: int):
+    from services import redemption
+    c = redemption.get_code(code_id)
+    if not c:
+        await _edit(query, "❌ الكود غير موجود.", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_codes", "🔙 الأكواد")))
+        return
+    eff = _code_effective_status(c)
+    await _edit(query,
+        "🗑️ <b>تأكيد الحذف النهائي للكود</b>\n\n"
+        f"• الكود: <code>{redemption.mask_code(c['code'])}</code>\n"
+        f"• الحالة: {_CODE_STATUS_AR.get(eff, eff)}\n"
+        f"• الاستهلاك الحالي: <b>{int(c.get('uses_consumed') or 0)}/{int(c.get('max_uses') or 1)}</b>\n\n"
+        "سيتم محو الكود <b>نهائيًا</b> من النظام:\n"
+        "• نص الكود وسجله الكامل (إنشاء/استخدام/إلغاء)\n"
+        "• لا يمكن التراجع عن هذه العملية.\n\n"
+        "📌 النسخ التي تم تفعيلها بهذا الكود <b>لن تتأثر</b> وتبقى تعمل لدى أصحابها.",
+        parse_mode="HTML",
+        reply_markup=_kb([
+            [inline_button("✅ نعم، احذف نهائيًا", callback_data=f"own_codes_deldo_{code_id}"),
+             inline_button("↩️ تراجع", callback_data=f"own_codes_detail_{code_id}")],
+        ]))
+
+
+async def _code_delete_do(query, code_id: int):
+    from services import redemption
+    c = redemption.get_code(code_id) or {}
+    ok, counts = redemption.delete_code(code_id, by_owner=query.from_user.id)
+    log_admin_action(query.from_user.id, "owner_code_delete", code_id,
+                     detail=f"prefix={redemption.code_prefix(c.get('code') or '')} counts={counts}")
+    if ok:
+        msg = ("🗑️ <b>تم حذف الكود نهائيًا</b> — أُزيل نص الكود وسجله بالكامل، "
+               "وسُجلت العملية في سجل الأمان.\n\n"
+               "📌 النسخ التي فُعّلت بهذا الكود تبقى تعمل دون تأثر.")
+    else:
+        msg = "ℹ️ تعذر الحذف: الكود غير موجود (ربما حُذف بالفعل)."
+    await _edit(query, msg, parse_mode="HTML",
+                reply_markup=_kb(_back("own_codes", "🔙 الأكواد")))
+
+
 # ---- code creation wizard ------------------------------------------------------------------
 # Step chain: plan → runtime days → uses → code validity → user restriction
 # → note → confirmation. The draft lives in OWNER_PENDING[uid]["code_draft"].
