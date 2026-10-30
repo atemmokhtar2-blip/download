@@ -11,9 +11,10 @@ SQL in this module is written with ``?`` placeholders; they are translated
 to ``%s`` before execution. Rows always come back as plain dicts. Ids that
 need to be returned use ``insert_returning_id`` (PostgreSQL ``RETURNING``).
 
-Connections are short-lived (open → execute → commit → close). Referral
-traffic is low-frequency, and Neon/serverless Postgres is designed for
-exactly this pattern.
+A thread-safe ``psycopg2`` connection pool reuses connections across calls
+(see ``pooled_connection``) instead of paying Neon/serverless-Postgres auth +
+TLS + backend-fork overhead on every query. Pool sizing is tunable via
+``PG_MIN_CONN`` / ``PG_MAX_CONN``.
 """
 
 from __future__ import annotations
@@ -79,34 +80,96 @@ class _Cursor:
         return self._raw.rowcount
 
 
-@contextmanager
-def ref_cursor(commit: bool = True):
-    """Yield a dict-row cursor; commit on success, rollback on error."""
+# ---------------------------------------------------------------------------
+# Connection pooling ---------------------------------------------------------
+# Connections used to be opened and CLOSED for every single statement, which
+# is the #1 bottleneck on Neon / serverless Postgres (auth + TLS + backend
+# fork overhead on each query). A thread-safe psycopg2 ThreadedConnectionPool
+# is created lazily and reused by every call. It is keyed by DSN because the
+# test harness mutates ``PG_DSN`` per isolated database — a stale pool pointing
+# at a dropped database must never be reused.
+# ---------------------------------------------------------------------------
+
+PG_MIN_CONN = max(1, int(os.getenv("PG_MIN_CONN", "1")))
+PG_MAX_CONN = max(PG_MIN_CONN, int(os.getenv("PG_MAX_CONN", "10")))
+
+_pool = None
+_pool_dsn: str = ""
+_pool_lock = threading.Lock()
+
+
+def _get_pool():
+    global _pool, _pool_dsn
     if not PG_DSN:
         raise RuntimeError(MISSING_DSN_ERROR)
-    conn = None
+    with _pool_lock:
+        if _pool is None or _pool_dsn != PG_DSN:
+            if _pool is not None:
+                try:
+                    _pool.closeall()
+                except Exception:
+                    pass
+            from psycopg2 import pool as _psycopg2_pool
+
+            _pool = _psycopg2_pool.ThreadedConnectionPool(
+                PG_MIN_CONN, PG_MAX_CONN, PG_DSN, connect_timeout=15
+            )
+            _pool_dsn = PG_DSN
+        return _pool
+
+
+def _return_conn(pool, conn) -> None:
     try:
-        import psycopg2
-        import psycopg2.extras
-        conn = psycopg2.connect(PG_DSN, connect_timeout=15)
-        raw = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur = _Cursor(raw)
-        yield cur
+        pool.putconn(conn)
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@contextmanager
+def pooled_connection(commit: bool = True):
+    """Yield a pooled psycopg2 connection; commit on success, rollback on error.
+
+    Read-only callers (``commit=False``) end their transaction with a rollback
+    so a snapshot / lock is never leaked back into the pool. Rollback after a
+    successful commit is a no-op, so this is always safe.
+    """
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        yield conn
         if commit:
             conn.commit()
     except Exception:
         try:
-            if conn is not None:
-                conn.rollback()
+            conn.rollback()
         except Exception:
             pass
         raise
     finally:
         try:
-            if conn is not None:
-                conn.close()
+            conn.rollback()
         except Exception:
             pass
+        _return_conn(pool, conn)
+
+
+@contextmanager
+def ref_cursor(commit: bool = True):
+    """Yield a dict-row cursor backed by a pooled connection."""
+    with pooled_connection(commit=commit) as conn:
+        import psycopg2.extras
+
+        raw = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            yield _Cursor(raw)
+        finally:
+            try:
+                raw.close()
+            except Exception:
+                pass
 
 
 def execute(sql: str, params: tuple = ()) -> int:

@@ -49,6 +49,16 @@ T = db._pg_translate
 out = T("SELECT * FROM users WHERE user_id = ? AND is_banned = ?")
 check("? -> %s", "%s" in out and "?" not in out)
 
+# 1b) literal-aware placeholders -----------------------------------------------
+# A `?` inside a string literal, quoted identifier, or comment is DATA, not a
+# bind placeholder — it must survive and never be silently rewritten to `%s`.
+out = T("SELECT '?' AS q, \"col?\" AS c FROM t WHERE x = ? -- ? line\n/* ? block */")
+check("string literal '?' preserved", "'?'" in out)
+check("quoted identifier '?' preserved", '"col?"' in out)
+check("line comment '?' preserved", "? line" in out)
+check("block comment '?' preserved", "? block" in out)
+check("only bind '?' converted", out.count("%s") == 1)
+
 # 2) datetime('now') ----------------------------------------------------------
 out = T("UPDATE users SET last_seen = datetime('now') WHERE user_id = ?")
 check("datetime('now') -> to_char(now() utc)", "to_char(now() at time zone 'utc'" in out)

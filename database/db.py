@@ -61,6 +61,91 @@ def _pg_now() -> str:
     return f"to_char(now() at time zone 'utc', '{_PG_TS_FMT}')"
 
 
+def _interval_modifier(literal: str) -> str:
+    """Convert a ``datetime('now', '<modifier>')`` literal to a PG interval.
+
+    PostgreSQL casts these inline to ``interval``; a SQLite-only modifier such
+    as ``localtime`` / ``utc`` / ``unixepoch`` / ``start of month`` is NOT a
+    valid interval and would silently produce a runtime SQL error. Fail loudly
+    instead of emitting an interval that Postgres can never parse.
+    """
+    stripped = literal.strip()
+    if not re.match(r"^[+-]?\d", stripped):
+        raise ValueError(
+            f"_pg_translate cannot turn datetime modifier {literal!r} into a "
+            "PostgreSQL interval; use a value like '-7 days' or '1 hour'"
+        )
+    return f"to_char((now() at time zone 'utc') + interval '{literal}', '{_PG_TS_FMT}')"
+
+
+def _replace_placeholders(sql: str) -> str:
+    """Rewrite ``?`` bind placeholders to PostgreSQL ``%s`` — literal-aware.
+
+    A bare ``sql.replace("?", "%s")`` also rewrites a ``?`` that appears inside
+    a ``'string literal'``, ``"quoted identifier"``, ``-- line comment`` or
+    ``/* block comment */``, silently corrupting SQL that would otherwise be
+    valid and shipping a broken/incorrect statement to PostgreSQL. This walks
+    the statement and only rewrites ``?`` tokens in actual SQL code, leaving
+    quoted/comment regions untouched.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        # Single-quoted string literal ('' is the escaped quote).
+        if ch == "'":
+            out.append(ch)
+            i += 1
+            while i < n:
+                out.append(sql[i])
+                if sql[i] == "'":
+                    if i + 1 < n and sql[i + 1] == "'":
+                        out.append(sql[i + 1])
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+        # Double-quoted identifier (PostgreSQL folds case by default).
+        if ch == '"':
+            out.append(ch)
+            i += 1
+            while i < n:
+                out.append(sql[i])
+                if sql[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        # Line comment (-- to end of line).
+        if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+            j = sql.find("\n", i)
+            if j == -1:
+                j = n
+            out.append(sql[i:j])
+            i = j
+            continue
+        # Block comment (/* ... */).
+        if ch == "/" and i + 1 < n and sql[i + 1] == "*":
+            j = sql.find("*/", i + 2)
+            if j == -1:
+                j = n
+            else:
+                j += 2
+            out.append(sql[i:j])
+            i = j
+            continue
+        if ch == "?":
+            out.append("%s")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _pg_translate(sql: str) -> str:
     """Translate the portable shorthand dialect used across database/*.py to PG."""
     s = sql
@@ -72,8 +157,7 @@ def _pg_translate(sql: str) -> str:
     s = _RE_DT_PARAM.sub(
         f"to_char((now() at time zone 'utc') + (?)::interval, '{_PG_TS_FMT}')", s)
     # datetime('now', '-7 days')  ->  literal interval
-    s = _RE_DT_LITERAL.sub(
-        lambda m: f"to_char((now() at time zone 'utc') + interval '{m.group(1)}', '{_PG_TS_FMT}')", s)
+    s = _RE_DT_LITERAL.sub(lambda m: _interval_modifier(m.group(1)), s)
     # datetime('now')
     s = _RE_DT_NOW.sub(_pg_now(), s)
     # date('now') / date(col)
@@ -89,9 +173,43 @@ def _pg_translate(sql: str) -> str:
     s = _RE_PK_AUTOINC.sub("SERIAL PRIMARY KEY", s)
     s = _RE_PK_PLAIN.sub("BIGINT PRIMARY KEY", s)
     s = re.sub(r"\bINTEGER\b", "BIGINT", s)
-    # Placeholders last.
-    s = s.replace("?", "%s")
+    # Placeholders last — literal-aware (never rewrites `?` inside a string
+    # literal, quoted identifier, or comment).
+    s = _replace_placeholders(s)
+    _validate_translation(s)
     return s
+
+
+def _snippet(sql: str, pos: int, width: int = 80) -> str:
+    """A short, diagnostic slice of ``sql`` centered on ``pos``."""
+    start = max(0, pos - 20)
+    end = min(len(sql), pos + width)
+    return sql[start:end]
+
+
+def _validate_translation(translated: str) -> None:
+    """Fail loudly when a shorthand construct survived translation.
+
+    ``_pg_translate`` previously relied on regexes that could silently miss a
+    variant (unusual whitespace, casing, a nested call) and ship broken SQL to
+    PostgreSQL — which then failed deep inside a handler with a confusing,
+    unrelated error. Every shorthand construct has a deterministic PostgreSQL
+    rewrite, so any survivor is a bug and must raise, never silently degrade.
+    """
+    checks = (
+        (re.compile(r"datetime\s*\(", re.I), "datetime(...)"),
+        (re.compile(r"\bINSERT\s+OR\s+IGNORE\b", re.I), "INSERT OR IGNORE"),
+        (re.compile(r"\bAUTOINCREMENT\b", re.I), "AUTOINCREMENT"),
+        (re.compile(r"\bdate\s*\(\s*'now'\s*\)", re.I), "date('now')"),
+    )
+    for pattern, label in checks:
+        m = pattern.search(translated)
+        if m:
+            snippet = _snippet(translated, m.start())
+            raise ValueError(
+                f"_pg_translate failed to translate {label!r}; "
+                f"refusing to send broken SQL to PostgreSQL: {snippet!r}"
+            )
 
 
 class _PGCompatCursor:
@@ -158,27 +276,19 @@ def table_columns(table: str) -> set:
 
 @contextmanager
 def db_cursor():
-    dsn = _pg_dsn()
-    if not dsn:
-        raise RuntimeError(_MISSING_DSN_ERROR)
-    import psycopg2
-    import psycopg2.extras
-    conn = psycopg2.connect(dsn, connect_timeout=15)
-    try:
+    from .pg import pooled_connection
+
+    with pooled_connection(commit=True) as conn:
+        import psycopg2.extras
+
         raw = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        yield _PGCompatCursor(raw)
-        conn.commit()
-    except Exception:
         try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+            yield _PGCompatCursor(raw)
+        finally:
+            try:
+                raw.close()
+            except Exception:
+                pass
 
 
 def init_db():
