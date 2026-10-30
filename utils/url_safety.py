@@ -13,13 +13,25 @@ worker thread, e.g. ``asyncio.wait_for(asyncio.to_thread(is_public_url, url), 6)
 from __future__ import annotations
 
 import ipaddress
-import re
 import socket
 from urllib.parse import urlparse
 
-# Numeric shorthand hosts ("2130706433", "0x7f000001") are always suspicious for
-# media URLs — no legitimate platform link uses them.
-_NUMERIC_HOST_RE = re.compile(r"^\d+$")
+
+def _ipv4_legacy_canonical(host: str) -> str | None:
+    """Return the canonical dotted-quad for an IPv4 literal in ANY recognised
+    inet_aton form — decimal, octal (``0177.0.0.1``), hex (``0x7f.0.0.1``),
+    shorthand (``127.1``) and single-integer (``2130706433``). Returns None for
+    hostnames and IPv6 literals, which inet_aton rejects.
+
+    ``ipaddress.ip_address`` only accepts the strict dotted-quad form, so
+    obfuscated IPv4 literals would otherwise be mistaken for hostnames and leak
+    through to the DNS stage. Normalizing here closes that gap independently of
+    how the platform resolver treats legacy numeric forms.
+    """
+    try:
+        return socket.inet_ntoa(socket.inet_aton(host))
+    except OSError:
+        return None
 
 
 def is_private_ip(host_or_ip: str) -> bool:
@@ -57,7 +69,9 @@ def is_public_url(url: str) -> tuple[bool, str]:
 
     Blocks, in order:
       * non http(s) schemes and URLs with embedded ``user:pass@`` credentials
-      * numeric-shorthand hosts and IP literals in any non-public range
+      * IPv4 literals in any form (dotted, octal, hex, shorthand, single-int)
+        resolving to a non-public address
+      * IPv6 literals in a non-public range
       * hostnames whose DNS resolution yields ANY non-public address
         (covers localhost and also DNS-rebinding style attacks)
 
@@ -78,8 +92,15 @@ def is_public_url(url: str) -> tuple[bool, str]:
     host = parsed.hostname
     if not host:
         return False, "invalid"
-    if _NUMERIC_HOST_RE.match(host):
-        return False, "private-ip"
+
+    # IPv4 literal in ANY recognised form (strict, octal, hex, shorthand,
+    # single-int). Normalize explicitly and apply the private-range check —
+    # never trust getaddrinfo to do the legacy conversion (it varies by OS).
+    canonical_v4 = _ipv4_legacy_canonical(host)
+    if canonical_v4 is not None:
+        return (False, "private-ip") if is_private_ip(canonical_v4) else (True, "ok")
+
+    # IPv6 literal in a non-public range (::1, fd00::1, fe80::1 …).
     if is_private_ip(host):
         return False, "private-ip"
 

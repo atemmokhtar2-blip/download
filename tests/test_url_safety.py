@@ -30,6 +30,23 @@ def test_public_url_blocks_numeric_shorthand_hosts() -> None:
     assert not ok and reason == "private-ip"
 
 
+def test_public_url_blocks_obfuscated_ipv4_literals() -> None:
+    # Legacy inet_aton forms that ipaddress.ip_address() REJECTS — these must
+    # not be mistaken for hostnames and handed to the platform resolver.
+    obfuscated = (
+        "0x7f.0.0.1",     # hex dotted → 127.0.0.1
+        "0177.0.0.1",     # octal dotted → 127.0.0.1
+        "127.1",          # shorthand → 127.0.0.1
+        "0x7f000001",     # hex single-int → 127.0.0.1
+        "0x0a.0.0.1",     # hex dotted → 10.0.0.1 (private)
+        "0xa9fe0101",     # hex single-int → 169.254.1.1 (link-local)
+    )
+    for host in obfuscated:
+        ok, reason = is_public_url(f"http://{host}/")
+        assert not ok, host
+        assert reason == "private-ip", (host, reason)
+
+
 def test_public_url_blocks_hostname_resolving_to_private() -> None:
     ok, _ = is_public_url("http://localhost/")
     assert not ok
@@ -68,6 +85,7 @@ if __name__ == "__main__":
     test_private_ip_literals_detected()
     test_public_url_blocks_private_literals()
     test_public_url_blocks_numeric_shorthand_hosts()
+    test_public_url_blocks_obfuscated_ipv4_literals()
     test_public_url_blocks_hostname_resolving_to_private()
     test_public_url_allows_public_targets()
     test_userinfo_and_nonhttp_blocked()
