@@ -671,7 +671,8 @@ _CODE_AUDIT_ACTION_AR = {
 # Wizard presets (the owner can always pick «مخصص» and type any value).
 _CODE_WIZ_DAYS = [(1, "1 يوم"), (7, "7 أيام"), (30, "30 يومًا"), (40, "40 يومًا")]
 _CODE_WIZ_USES = [(1, "مرة واحدة"), (2, "مرتان"), (5, "5 مرات")]
-_CODE_WIZ_VALID = [(7, "7 أيام"), (14, "14 يومًا"), (30, "30 يومًا")]
+_CODE_WIZ_VALID_HOURS = [(1, "ساعة واحدة"), (3, "3 ساعات"), (6, "6 ساعات"), (12, "12 ساعة")]
+_CODE_WIZ_VALID_DAYS = [(1, "يوم واحد"), (7, "7 أيام"), (14, "14 يومًا"), (30, "30 يومًا")]
 
 
 def _code_effective_status(c: dict) -> str:
@@ -841,7 +842,9 @@ def _code_wiz_summary(d: dict) -> str:
         parts.append(f"• مدة التفعيل: <b>{d['days']} يومًا</b>")
     if d.get("uses"):
         parts.append(f"• عدد مرات الاستخدام: <b>{d['uses']}</b> (نسخ يمكن تفعيلها)")
-    if d.get("valid"):
+    if d.get("valid_hours"):
+        parts.append(f"• صلاحية الكود قبل الاستخدام: <b>{d['valid_hours']} ساعة</b>")
+    elif d.get("valid"):
         parts.append(f"• صلاحية الكود قبل الاستخدام: <b>{d['valid']} يومًا</b>")
     if d.get("target") == "open":
         parts.append("• متاح لأي مستخدم")
@@ -885,11 +888,14 @@ def _code_wiz_step(uid: int, step: str) -> tuple[str, InlineKeyboardMarkup]:
                 "عدد <b>النسخ</b> التي يمكن تفعيلها بالكود (مستخدمون مختلفون) — "
                 "ولا يُستهلك الاستخدام إلا بعد نجاح إنشاء النسخة.")
     elif step == "valid":
-        rows = [[inline_button(label, callback_data=f"own_codes_wiz_valid_{v}")]
-                for v, label in _CODE_WIZ_VALID]
-        rows.append([inline_button("✏️ صلاحية مخصصة", callback_data="own_codes_wiz_valid_custom")])
+        rows = [[inline_button(label, callback_data=f"own_codes_wiz_valid_h_{v}")]
+                for v, label in _CODE_WIZ_VALID_HOURS]
+        rows += [[inline_button(label, callback_data=f"own_codes_wiz_valid_d_{v}")]
+                 for v, label in _CODE_WIZ_VALID_DAYS]
+        rows.append([inline_button("✏️ صلاحية مخصصة (أيام)", callback_data="own_codes_wiz_valid_custom")])
         text = (f"➕ <b>توليد رمز جديد — خطوة 4: صلاحية الكود</b>\n\n{summary}"
-                "الكود ينتهي تلقائيًا بعد هذه المدة من إنشائه — حتى لو لم يستخدمه أحد.")
+                "الكود ينتهي تلقائيًا بعد هذه المدة من إنشائه — حتى لو لم يستخدمه أحد. "
+                "اختر المدة بالساعات أو بالأيام.")
     elif step == "target":
         rows = [
             [inline_button("🌐 مفتوح لأي مستخدم", callback_data="own_codes_wiz_target_open")],
@@ -911,7 +917,8 @@ def _code_wiz_step(uid: int, step: str) -> tuple[str, InlineKeyboardMarkup]:
             "code_plan": d.get("plan", "basic"),
             "code_days": int(d.get("days") or 30),
             "code_uses": int(d.get("uses") or 1),
-            "code_valid": int(d.get("valid") or 7),
+            "code_valid": int(d.get("valid") or 0),
+            "code_valid_hours": int(d.get("valid_hours") or 0) or None,
             "code_note": d.get("note", ""),
             "code_target": d.get("targeted_user_id"),
         })
@@ -1931,9 +1938,16 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _edit(query,
                 "✏️ <b>صلاحية مخصصة</b>\n\nأرسل عدد الأيام التي يبقى الكود خلالها صالحًا للإدخال (1–365):",
                 parse_mode="HTML", reply_markup=_kb(_back("own_codes", "🔙 إلغاء")))
+        elif val.startswith("h_"):
+            d = _code_wiz_draft(uid)
+            d["valid_hours"] = int(val[2:])
+            d.pop("valid", None)
+            text, kb = _code_wiz_step(uid, "target")
+            await _edit(query, text, parse_mode="HTML", reply_markup=kb)
         else:
             d = _code_wiz_draft(uid)
-            d["valid"] = int(val)
+            d["valid"] = int(val[2:])
+            d.pop("valid_hours", None)
             text, kb = _code_wiz_step(uid, "target")
             await _edit(query, text, parse_mode="HTML", reply_markup=kb)
     elif data == "own_codes_wiz_target_open":
@@ -1966,6 +1980,7 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending["code_plan"], pending["code_days"], pending["code_uses"],
             pending["code_valid"], note=pending.get("code_note", ""), created_by=uid,
             targeted_user_id=pending.get("code_target"),
+            valid_hours=pending.get("code_valid_hours"),
         )
         if not res.get("ok"):
             await _edit(query, f"⚠️ تعذر إنشاء الكود: <code>{escape(str(res.get('reason')))}</code>",
@@ -1977,6 +1992,12 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 f"targeted={res.get('targeted_user_id') or 'open'} "
                                 f"prefix={redemption.code_prefix(res['code'])}")
         badge = "👑 Pro" if res["plan"] == "pro" else "🆓 Basic"
+        if res.get("valid_hours"):
+            validity_line = (f"• صالح للإدخال حتى: <b>{str(res['expires_at'])[:16]}</b> "
+                             f"(⏱ {int(res['valid_hours'])} ساعة)\n")
+        else:
+            validity_line = (f"• صالح للإدخال حتى: <b>{str(res['expires_at'])[:16]}</b> "
+                             f"(⭐ {int(res['valid_days'])} يومًا)\n")
         target_line = (f"• مخصص للمستخدم: <code>{res['targeted_user_id']}</code>\n"
                        if res.get("targeted_user_id") else "• متاح لأي مستخدم\n")
         await _edit(query,
@@ -1984,7 +2005,7 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎟️ الكود: <code>{res['code']}</code>\n"
             f"• الخطة: {badge} • مدة التشغيل: <b>{res['runtime_days']} يومًا</b>\n"
             f"• عدد الاستخدامات: <b>{res['max_uses']}</b> (مستخدمون مختلفون)\n"
-            f"• صالح للإدخال حتى: <b>{str(res['expires_at'])[:10]}</b>\n"
+            f"{validity_line}"
             f"{target_line}\n"
             "⚠️ <b>هذا هو العرض الوحيد للكود كاملًا</b> — انسخه الآن وأرسله "
             "للمستفيد. بعدها يظهر مقنعًا في القائمة.\n"

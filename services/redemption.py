@@ -53,6 +53,7 @@ PLAN_CHOICES = ("basic", "pro")
 MAX_RUNTIME_DAYS = 365
 MAX_USES = 50
 MAX_VALID_DAYS = 365
+MAX_VALID_HOURS = 24 * MAX_VALID_DAYS  # 8760
 
 # The free trial is always 24 hours, one per Telegram user, ever.
 TRIAL_HOURS = 24
@@ -141,47 +142,62 @@ def _log(code_id: int, action: str, user_id: int | None = None,
 
 def create_code(plan: str, runtime_days: int, max_uses: int, valid_days: int,
                 note: str = "", created_by: int | None = None,
-                targeted_user_id: int | None = None) -> dict:
+                targeted_user_id: int | None = None,
+                valid_hours: int | None = None) -> dict:
     """Create one redemption code. Returns {ok, code, code_id, ...}.
 
     ``targeted_user_id`` restricts the code to ONE Telegram user (NULL =
     open to anyone). The FULL code text is returned exactly once (for the
     owner to copy); afterwards only masked fragments are ever displayed.
+
+    Pre-use validity is exact: ``valid_hours`` (1–8760) gives hour-granularity
+    ("ينتهي خلال ساعة"); otherwise ``valid_days`` (1–365) gives whole days.
+    ``expires_at`` is ALWAYS stored as the precise UTC datetime the code dies,
+    and enforcement compares against that same app-side UTC clock.
     """
     plan = "pro" if (plan or "").strip().lower() == "pro" else "basic"
     runtime_days = int(runtime_days)
     max_uses = int(max_uses)
-    valid_days = int(valid_days)
+    valid_days = int(valid_days or 0)
+    valid_hours = int(valid_hours) if valid_hours else None
     if not 1 <= runtime_days <= MAX_RUNTIME_DAYS:
         return {"ok": False, "reason": "runtime_days_range"}
     if not 1 <= max_uses <= MAX_USES:
         return {"ok": False, "reason": "max_uses_range"}
-    if not 1 <= valid_days <= MAX_VALID_DAYS:
+    if valid_hours is not None:
+        if not 1 <= valid_hours <= MAX_VALID_HOURS:
+            return {"ok": False, "reason": "valid_hours_range"}
+        valid_days = 0
+    elif not 1 <= valid_days <= MAX_VALID_DAYS:
         return {"ok": False, "reason": "valid_days_range"}
     targeted = int(targeted_user_id) if targeted_user_id else None
 
     created = _utcnow()
-    expires = created + timedelta(days=valid_days)
+    if valid_hours is not None:
+        expires = created + timedelta(hours=valid_hours)
+    else:
+        expires = created + timedelta(days=valid_days)
     # Collision-safe insert (26^8 space — retries are theoretical).
     for _attempt in range(5):
         code = _generate_code(plan)
         code_id = pg.insert_returning_id(
             "INSERT INTO redemption_codes "
-            "(code, plan, runtime_days, max_uses, valid_days, note, created_by, "
+            "(code, plan, runtime_days, max_uses, valid_days, valid_hours, note, created_by, "
             "targeted_user_id, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (code, plan, runtime_days, max_uses, valid_days,
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (code, plan, runtime_days, max_uses, valid_days, valid_hours,
              (note or "")[:200], created_by, targeted, _ts(expires)),
         )
         if code_id:
             _log(code_id, "created", user_id=created_by,
                  details=f"plan={plan} runtime_days={runtime_days} max_uses={max_uses} "
-                         f"valid_days={valid_days} targeted={targeted or 'open'} "
+                         f"valid_days={valid_days} valid_hours={valid_hours} targeted={targeted or 'open'} "
                          f"prefix={code_prefix(code)}")
             return {"ok": True, "code_id": code_id, "code": format_code(code),
                     "plan": plan,
                     "runtime_days": runtime_days, "max_uses": max_uses,
-                    "valid_days": valid_days, "targeted_user_id": targeted,
+                    "valid_days": valid_days, "valid_hours": valid_hours,
+                    "targeted_user_id": targeted,
                     "expires_at": _ts(expires)}
     return {"ok": False, "reason": "collision"}
 
@@ -197,25 +213,32 @@ def find_code(code_text: str) -> dict | None:
 
 
 _CODE_COLS = ("id, code, plan, runtime_days, max_uses, uses_consumed, valid_days, "
-              "status, targeted_user_id, expires_at, created_at")
+              "valid_hours, status, targeted_user_id, expires_at, created_at")
 
 
 def list_codes(limit: int = 15, status: str | None = None) -> list[dict]:
     """Owner list. ``status`` filters by EFFECTIVE state: 'expired' means an
-    'active' row past expires_at; 'active' means not-yet-expired."""
+    'active' row past expires_at; 'active' means not-yet-expired.
+
+    The boundary is computed with the SAME app-side UTC clock used to stamp
+    and enforce ``expires_at`` — never the DB's CURRENT_TIMESTAMP — so a code
+    set to die "after 1 hour" flips to expired in the owner's tabs at exactly
+    the moment redemption starts rejecting it.
+    """
+    now = _ts(_utcnow())
     if status == "expired":
         return pg.fetchall(
             f"SELECT {_CODE_COLS} FROM redemption_codes "
             "WHERE status = 'active' AND expires_at IS NOT NULL "
-            "AND expires_at <= CURRENT_TIMESTAMP ORDER BY id DESC LIMIT ?",
-            (int(limit),),
+            "AND expires_at <= ? ORDER BY id DESC LIMIT ?",
+            (now, int(limit)),
         )
     if status == "active":
         return pg.fetchall(
             f"SELECT {_CODE_COLS} FROM redemption_codes "
-            "WHERE status = 'active' AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP) "
+            "WHERE status = 'active' AND (expires_at IS NULL OR expires_at > ?) "
             "ORDER BY id DESC LIMIT ?",
-            (int(limit),),
+            (now, int(limit)),
         )
     if status in ("exhausted", "revoked"):
         return pg.fetchall(
@@ -441,11 +464,15 @@ def redeem_code(user_id: int, code_text: str) -> dict:
 
     # THE concurrency guard: one atomic statement; rowcount 0 means someone
     # else took the last slot (or the code was revoked/expired mid-flight).
+    # Use the SAME app-side UTC clock that stamped ``expires_at`` at creation.
+    # Comparing against the database's CURRENT_TIMESTAMP would make expiry
+    # drift if the DB server's timezone differs from the owner's intent; a
+    # 1-hour code must die exactly 1 hour after the admin created it.
     affected = pg.execute(
         "UPDATE redemption_codes SET uses_consumed = uses_consumed + 1 "
         "WHERE id = ? AND status = 'active' AND uses_consumed < max_uses "
-        "AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)",
-        (code_id,),
+        "AND (expires_at IS NULL OR expires_at > ?)",
+        (code_id, _ts(_utcnow())),
     )
     if not affected:
         fresh = get_code(code_id) or {}

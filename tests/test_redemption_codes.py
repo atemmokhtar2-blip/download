@@ -242,6 +242,31 @@ def _setup_module_checks() -> None:
     r = redemption.redeem_code(7001, exp_res["code"])
     check("expired code rejected", r.get("ok") is False and r.get("reason") == "expired")
 
+    print("== hour-granularity pre-use validity ==")
+    # الكود ينتهي "ساعة" من إنشائه — بنفس دقة الشاشة اللي الادمن حطها.
+    h_res = redemption.create_code("basic", 30, 1, 0, valid_hours=1, created_by=OWNER)
+    check("hour-validity code created", h_res.get("ok") is True
+          and int(h_res["valid_hours"]) == 1 and int(h_res["valid_days"]) == 0)
+    cid_h = h_res["code_id"]
+    row_h = redemption.get_code(cid_h)
+    check("expires_at = created + 1 hour",
+          row_h["expires_at"] is not None and
+          abs((row_h["expires_at"] - datetime.utcnow()).total_seconds() - 3600) < 120)
+    bad_h = redemption.create_code("basic", 30, 1, 0, valid_hours=-1)
+    check("valid_hours=-1 rejected", not bad_h.get("ok")
+          and bad_h.get("reason") == "valid_hours_range")
+    bad_h2 = redemption.create_code("basic", 30, 1, 0, valid_hours=99999)
+    check("valid_hours > max (8760) rejected", not bad_h2.get("ok")
+          and bad_h2.get("reason") == "valid_hours_range")
+    # انتهت الساعة: الكود يتقفل فعليًا حتى لو row لسه status=active.
+    pg.execute("UPDATE redemption_codes SET expires_at = ? WHERE id = ?",
+               ((datetime.utcnow() - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S"), cid_h))
+    rh = redemption.redeem_code(7550, h_res["code"])
+    check("hour-expired code rejected", rh.get("ok") is False
+          and rh.get("reason") in ("expired", "limit_reached"))
+    check("hour-expired rejection consumed nothing",
+          int(redemption.get_code(cid_h)["uses_consumed"]) == 0)
+
     print("== stale reservation sweep ==")
     sweep_res = redemption.create_code("basic", 30, 1, 30, created_by=OWNER)
     cid_sw = sweep_res["code_id"]

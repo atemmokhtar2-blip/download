@@ -259,6 +259,7 @@ def init_referral_schema() -> None:
             max_uses INTEGER DEFAULT 1,
             uses_consumed INTEGER DEFAULT 0,
             valid_days INTEGER DEFAULT 7,
+            valid_hours INTEGER,
             status TEXT DEFAULT 'active',
             note TEXT DEFAULT '',
             created_by {bi},
@@ -306,6 +307,7 @@ def init_referral_schema() -> None:
     ensure_reward_milestone_column()
     ensure_instance_plan_columns()
     ensure_redemption_targeted_user_column()
+    ensure_redemption_valid_hours_column()
     ensure_clone_settings_migration()
     ensure_plan_schema()
     ensure_clone_users_migration()
@@ -453,6 +455,22 @@ def ensure_redemption_targeted_user_column() -> None:
         )
     except Exception:
         logger.exception("redemption targeted-user column migration failed")
+
+
+def ensure_redemption_valid_hours_column() -> None:
+    """Add hour-granularity pre-use validity to existing redemption codes.
+
+    Lets an owner issue a code valid for a few HOURS (e.g. "ينتهي بعد ساعة")
+    instead of whole days. ``expires_at`` remains the precise enforcement
+    store; ``valid_hours`` only keeps the chosen unit for display + audits.
+    """
+    try:
+        execute(
+            "ALTER TABLE redemption_codes "
+            "ADD COLUMN IF NOT EXISTS valid_hours INTEGER"
+        )
+    except Exception:
+        logger.exception("redemption valid-hours column migration failed")
 
 
 def ensure_clone_users_migration() -> None:
