@@ -469,6 +469,8 @@ if __name__ == "__main__":
         demo,
         path="/",
         auth=dashboard_auth,
+        show_error=False,
+        allowed_paths=[TEMP_DIR],
     )
     uvicorn.run(
         web_app,
