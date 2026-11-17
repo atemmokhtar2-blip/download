@@ -82,6 +82,7 @@ def _ensure_factory_schema() -> None:
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
+    pg.execute("ALTER TABLE bot_instances ADD COLUMN IF NOT EXISTS runtime_status TEXT DEFAULT 'pending'")
     pg.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS download_factory_one_live_instance_per_owner
         ON bot_instances(owner_id)
@@ -95,6 +96,43 @@ async def health():
         return {"ok": True, "service": "download-factory-adapter"}
     except Exception:
         return JSONResponse({"ok": False}, status_code=503)
+
+@app.get("/internal/factory/status/{request_id}")
+async def status(
+    request_id: str,
+    request: Request,
+    x_factory_timestamp: str = Header(default=""),
+    x_factory_signature: str = Header(default=""),
+):
+    _authenticate(x_factory_timestamp, x_factory_signature, "GET", request.url.path, b"")
+    try:
+        request_uuid = str(uuid.UUID(request_id))
+    except Exception:
+        raise HTTPException(400, "invalid_request")
+    _ensure_factory_schema()
+    row = pg.fetchone(
+        "SELECT instance_id, bot_id, bot_username, status, safe_error_code "
+        "FROM factory_provision_requests WHERE request_id=? LIMIT 1",
+        (request_uuid,),
+    )
+    if not row or not row.get("instance_id"):
+        raise HTTPException(404, "instance_not_found")
+    runtime = pg.fetchone(
+        "SELECT runtime_status, last_error, status FROM bot_instances WHERE id=? LIMIT 1",
+        (int(row["instance_id"]),),
+    ) or {}
+    runtime_status = str(runtime.get("runtime_status") or "pending")
+    mapped = "active" if runtime_status == "running" else "failed" if runtime_status == "failed" else "provisioning"
+    error_code = str(runtime.get("last_error") or row.get("safe_error_code") or "")[:80] or None
+    return {
+        "request_id": request_uuid,
+        "instance_id": str(row["instance_id"]),
+        "bot_id": row.get("bot_id"),
+        "bot_username": row.get("bot_username"),
+        "status": mapped,
+        "error_code": error_code,
+    }
+
 
 @app.post("/internal/factory/provision")
 async def provision(
