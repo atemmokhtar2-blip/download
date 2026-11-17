@@ -5,7 +5,6 @@ import sys
 import time
 import logging
 import asyncio
-import secrets
 from datetime import datetime
 from pathlib import Path
 
@@ -429,19 +428,16 @@ if __name__ == "__main__":
         logger.warning("Invalid PORT value; falling back to 7860")
         server_port = 7860
 
-    # The dashboard exposes user data on the public internet: always protect it.
-    # Set DASHBOARD_USERNAME / DASHBOARD_PASSWORD as environment secrets.
-    # DASHBOARD_AUTH_DISABLED=1 is only intended for local development.
-    if os.getenv("DASHBOARD_AUTH_DISABLED", "0") == "1":
-        dashboard_auth = None
-        logger.warning("Dashboard auth disabled (DASHBOARD_AUTH_DISABLED=1) — local dev only.")
-    else:
-        dash_user = os.getenv("DASHBOARD_USERNAME", "admin").strip() or "admin"
-        dash_pass = os.getenv("DASHBOARD_PASSWORD", "").strip()
-        if not dash_pass:
-            dash_pass = secrets.token_urlsafe(16)
-            logger.warning("DASHBOARD_PASSWORD not set — generated a temporary password: %s", dash_pass)
-        dashboard_auth = (dash_user, dash_pass)
+    # The dashboard exposes user data: authentication is mandatory.
+    # Configure DASHBOARD_USERNAME and DASHBOARD_PASSWORD as deployment secrets.
+    # Never disable authentication or log credentials on a public deployment.
+    dash_user = os.getenv("DASHBOARD_USERNAME", "admin").strip() or "admin"
+    dash_pass = os.getenv("DASHBOARD_PASSWORD", "").strip()
+    if not dash_pass:
+        raise RuntimeError(
+            "DASHBOARD_PASSWORD is required. Configure it as a deployment secret."
+        )
+    dashboard_auth = (dash_user, dash_pass)
 
     logger.info("Starting Gradio server on 0.0.0.0:%s", server_port)
     # Hardening: Gradio's /file= endpoint can otherwise serve ANY file under the
