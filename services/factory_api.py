@@ -1,11 +1,8 @@
-"""Private provisioning API for the Download template.
+"""Private provisioning API mounted inside the existing Download service.
 
-Run as a separate Railway service from the same repository:
-    uvicorn services.factory_api:app --host 0.0.0.0 --port $PORT
-
-The long-running Download bot process owns the clone pollers. This API only
-creates durable instances; the bot process discovers and starts them through
-the periodic instance-manager sync worker.
+The current Railway process serves this API and the Gradio dashboard together.
+The existing Telegram bot event loop owns all clone pollers; this API only
+persists provisioning requests, and instance_sync_worker starts clones there.
 """
 from __future__ import annotations
 
@@ -159,7 +156,7 @@ async def provision(
 
     _ensure_factory_schema()
     prior = pg.fetchone(
-        "SELECT request_id, instance_id, bot_id, bot_username, status, safe_error_code "
+        "SELECT request_id, owner_telegram_id, instance_id, bot_id, bot_username, status, safe_error_code "
         "FROM factory_provision_requests WHERE request_id = ?",
         (request_uuid,),
     )
