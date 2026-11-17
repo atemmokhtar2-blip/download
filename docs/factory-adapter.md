@@ -22,7 +22,8 @@ The following values must be available to the one Download service:
 - `NEON_DATABASE_URL` (or `POSTGRES_URL` / `DATABASE_URL`): same PostgreSQL database.
 - `BOT_SECRETS_KEY`: exactly the same stable encryption key used by the main worker.
 - `TELEGRAM_BOT_TOKEN`: main Download bot token, used only to reject linking the main bot as a clone.
-- `FACTORY_SERVICE_SECRET`: a new random secret of at least 32 bytes, also configured on the factory Vercel project.
+- `FACTORY_SERVICE_SECRET`: a random secret of at least 32 bytes, identical to the value configured on Factory and the other source adapters.
+- `FACTORY_MANAGER_BOT_TOKEN`: the Factory bot token, used to verify users' membership in `@K_J6k`. The Factory bot must be an administrator in that channel.
 
 Keep `ENABLE_CLONE_INSTANCES=1` on the existing long-running Download service.
 The factory API is part of this same process and does not start a second Telegram poller.
@@ -35,9 +36,7 @@ The factory API is part of this same process and does not start a second Telegra
   raw tokens are never logged.
 - Each owner can have one live Download clone. Telegram bot tokens cannot be
   linked to more than one instance.
-- The bot token must already have administrator rights in `@K_J6k`. This is
-  required because each Download clone checks membership using its own bot
-  identity. Provisioning fails closed if that permission is missing.
+- The central Factory bot (`FACTORY_MANAGER_BOT_TOKEN`) checks membership in `@K_J6k` for all Download clones. Customer-created clone bots do not need channel administrator rights.
 - The existing Download worker scans PostgreSQL every 20 seconds and starts
   newly provisioned active instances in its own process. Do not run clone
   polling in the API service.
