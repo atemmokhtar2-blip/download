@@ -434,9 +434,15 @@ if __name__ == "__main__":
     dash_user = os.getenv("DASHBOARD_USERNAME", "admin").strip() or "admin"
     dash_pass = os.getenv("DASHBOARD_PASSWORD", "").strip()
     if not dash_pass:
-        raise RuntimeError(
-            "DASHBOARD_PASSWORD is required. Configure it as a deployment secret."
+        # Keep the Telegram bot alive if the dashboard secret is not configured.
+        # Do not expose the dashboard without authentication and do not crash-loop
+        # the whole Railway service just because this optional web panel is locked.
+        logger.error(
+            "Dashboard is disabled: DASHBOARD_PASSWORD is missing. "
+            "Set it as a Railway deployment secret to enable the web dashboard."
         )
+        threading.Event().wait()
+
     dashboard_auth = (dash_user, dash_pass)
 
     logger.info("Starting Gradio server on 0.0.0.0:%s", server_port)
