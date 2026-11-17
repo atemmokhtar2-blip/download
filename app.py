@@ -434,14 +434,31 @@ if __name__ == "__main__":
     dash_user = os.getenv("DASHBOARD_USERNAME", "admin").strip() or "admin"
     dash_pass = os.getenv("DASHBOARD_PASSWORD", "").strip()
     if not dash_pass:
-        # Keep the Telegram bot alive if the dashboard secret is not configured.
-        # Do not expose the dashboard without authentication and do not crash-loop
-        # the whole Railway service just because this optional web panel is locked.
+        # Keep the Railway web service healthy without exposing dashboard data.
+        # The Telegram bot already runs in its own daemon thread. Serve only a
+        # minimal public lock notice until the owner configures the password.
         logger.error(
-            "Dashboard is disabled: DASHBOARD_PASSWORD is missing. "
-            "Set it as a Railway deployment secret to enable the web dashboard."
+            "Dashboard is locked: DASHBOARD_PASSWORD is missing. "
+            "Set it as a Railway deployment secret to enable the control center."
         )
-        threading.Event().wait()
+        with gr.Blocks(title="X Downloader — Dashboard Locked") as locked_demo:
+            gr.Markdown(
+                """
+# X Downloader Control Center
+## Dashboard temporarily locked
+
+The Telegram bot is running independently. The web control center is disabled
+until the owner configures the DASHBOARD_PASSWORD deployment secret.
+
+This page does not expose user data, metrics, configuration, or admin controls.
+                """
+            )
+        locked_demo.launch(
+            server_name="0.0.0.0",
+            server_port=server_port,
+            show_error=False,
+        )
+        sys.exit(0)
 
     dashboard_auth = (dash_user, dash_pass)
 
