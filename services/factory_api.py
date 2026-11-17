@@ -163,6 +163,8 @@ async def provision(
         "FROM factory_provision_requests WHERE request_id = ?",
         (request_uuid,),
     )
+    if prior and int(prior.get("owner_telegram_id") or 0) != payload.owner_telegram_id:
+        raise HTTPException(409, "request_owner_mismatch")
     if prior and prior.get("status") in ("active", "provisioning"):
         runtime = pg.fetchone(
             "SELECT runtime_status FROM bot_instances WHERE id=? LIMIT 1",
