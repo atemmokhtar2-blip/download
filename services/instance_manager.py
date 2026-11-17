@@ -49,11 +49,13 @@ async def spawn_instance(instance: dict) -> bool:
     # not on a manual owner "start". It must be renewed first (extend_instance).
     if referral.is_instance_expired(instance):
         referral.mark_instance_expired(instance_id)
+        referral.set_instance_runtime_status(instance_id, "stopped", "plan_expired")
         logger.info("Clone instance %s refused to boot: plan validity expired.", instance_id)
         return False
     token = referral.load_instance_token(instance_id)
     if not token:
         referral.set_instance_error(instance_id, "missing_or_undecryptable_token")
+        referral.set_instance_runtime_status(instance_id, "failed", "missing_or_undecryptable_token")
         return False
     try:
         # Lazy import: bot.py imports this module, avoid circular import at load.
@@ -65,12 +67,14 @@ async def spawn_instance(instance: dict) -> bool:
         _running[instance_id] = app
         logger.info("Clone instance %s (@%s) started.", instance_id, instance.get("bot_username"))
         referral.set_instance_error(instance_id, "")
+        referral.set_instance_runtime_status(instance_id, "running", "")
         return True
     except Exception as exc:
         # Only the exception CLASS is persisted: ptb errors can embed request
         # URLs that contain the bot token, and last_error is readable in the DB.
         logger.error("Failed to start clone instance %s: %s", instance_id, type(exc).__name__)
         referral.set_instance_error(instance_id, type(exc).__name__[:120])
+        referral.set_instance_runtime_status(instance_id, "failed", type(exc).__name__)
         return False
 
 
@@ -88,6 +92,7 @@ async def start_active_instances() -> None:
     # Give the main bot a moment to settle before adding pollers.
     await asyncio.sleep(5)
     try:
+        referral.pg.execute("UPDATE bot_instances SET runtime_status='pending' WHERE status='active'")
         instances = referral.list_active_instances()
     except Exception:
         logger.exception("Could not list active instances")
@@ -110,6 +115,7 @@ async def stop_instance(instance_id: int) -> None:
     try:
         await app.stop()
         await app.shutdown()
+        referral.set_instance_runtime_status(int(instance_id), "stopped", "")
     except Exception:
         logger.exception("Error shutting down instance %s", instance_id)
 
