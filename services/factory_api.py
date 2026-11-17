@@ -50,6 +50,23 @@ def _authenticate(timestamp: str, signature: str, method: str, path: str, body: 
     if not hmac.compare_digest(expected, signature or ""):
         raise HTTPException(401, "unauthorized")
 
+def _require_primary_channel_admin(token: str, bot_id: int) -> bool:
+    """A clone must be an admin of the factory channel to verify user membership."""
+    import urllib.parse
+    import urllib.request
+    url = "https://api.telegram.org/bot" + token + "/getChatMember?" + urllib.parse.urlencode({
+        "chat_id": "@K_J6k", "user_id": int(bot_id),
+    })
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "download-factory/1.0"})
+        with urllib.request.urlopen(req, timeout=12) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        status = (payload.get("result") or {}).get("status")
+        return bool(payload.get("ok") and status in ("administrator", "creator"))
+    except Exception:
+        return False
+
+
 def _ensure_factory_schema() -> None:
     pg.execute("""
         CREATE TABLE IF NOT EXISTS factory_provision_requests (
@@ -113,6 +130,13 @@ async def provision(
             "status": prior.get("status"),
             "error_code": prior.get("safe_error_code"),
         }
+
+    try:
+        identity = referral._tg_get_me(payload.bot_token)
+    except Exception:
+        raise HTTPException(422, "invalid_bot_token")
+    if not _require_primary_channel_admin(payload.bot_token, int(identity["id"])):
+        raise HTTPException(422, "download_bot_must_be_admin_in_required_channel")
 
     token_hash = referral.hash_token(payload.bot_token)
     existing_token = pg.fetchone("SELECT instance_id FROM bot_secrets WHERE token_hash = ?", (token_hash,))
