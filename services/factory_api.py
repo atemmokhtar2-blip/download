@@ -121,7 +121,7 @@ async def provision(
         "FROM factory_provision_requests WHERE request_id = ?",
         (request_uuid,),
     )
-    if prior:
+    if prior and prior.get("status") in ("active", "provisioning"):
         return {
             "request_id": request_uuid,
             "instance_id": str(prior.get("instance_id") or ""),
@@ -139,25 +139,47 @@ async def provision(
         raise HTTPException(422, "download_bot_must_be_admin_in_required_channel")
 
     token_hash = referral.hash_token(payload.bot_token)
+    instance_id = int(prior["instance_id"]) if prior and prior.get("instance_id") else None
     existing_token = pg.fetchone("SELECT instance_id FROM bot_secrets WHERE token_hash = ?", (token_hash,))
-    if existing_token:
+    if existing_token and (instance_id is None or int(existing_token["instance_id"]) != instance_id):
         raise HTTPException(409, "bot_token_already_linked")
+    if existing_token and instance_id is not None:
+        current = referral.get_instance(instance_id) or {}
+        pg.execute("UPDATE bot_instances SET status='active', last_error='' WHERE id=?", (instance_id,))
+        pg.execute(
+            "UPDATE factory_provision_requests SET bot_id=?, bot_username=?, status='provisioning', safe_error_code=NULL, updated_at=NOW() WHERE request_id=?",
+            (current.get("bot_id"), current.get("bot_username") or "", request_uuid),
+        )
+        return {
+            "request_id": request_uuid, "instance_id": str(instance_id),
+            "bot_id": current.get("bot_id"), "bot_username": current.get("bot_username"),
+            "status": "provisioning",
+        }
 
     existing = referral.get_instance_by_owner(payload.owner_telegram_id)
     if existing and existing.get("status") in ("pending_token", "active"):
-        raise HTTPException(409, "owner_already_has_download_instance")
+        if instance_id is None or int(existing.get("id") or 0) != instance_id:
+            raise HTTPException(409, "owner_already_has_download_instance")
 
-    pg.execute(
-        "INSERT INTO factory_provision_requests(request_id, owner_telegram_id, template_key, status) "
-        "VALUES (?, ?, 'download', 'provisioning')",
-        (request_uuid, payload.owner_telegram_id),
-    )
-    instance_id = None
-    try:
-        instance_id = pg.insert_returning_id(
-            "INSERT INTO bot_instances(owner_id, status, plan) VALUES (?, 'pending_token', 'basic')",
-            (payload.owner_telegram_id,),
+    if prior:
+        pg.execute(
+            "UPDATE factory_provision_requests SET status='provisioning', safe_error_code=NULL, updated_at=NOW() WHERE request_id=?",
+            (request_uuid,),
         )
+    else:
+        pg.execute(
+            "INSERT INTO factory_provision_requests(request_id, owner_telegram_id, template_key, status) "
+            "VALUES (?, ?, 'download', 'provisioning')",
+            (request_uuid, payload.owner_telegram_id),
+        )
+    try:
+        if instance_id is None:
+            instance_id = pg.insert_returning_id(
+                "INSERT INTO bot_instances(owner_id, status, plan) VALUES (?, 'pending_token', 'basic')",
+                (payload.owner_telegram_id,),
+            )
+        else:
+            pg.execute("UPDATE bot_instances SET status='pending_token', last_error='' WHERE id=?", (instance_id,))
         result = referral.verify_and_link_token(
             payload.owner_telegram_id,
             payload.bot_token,
