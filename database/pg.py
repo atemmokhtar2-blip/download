@@ -374,6 +374,7 @@ def init_referral_schema() -> None:
 
     register("reward_milestone", "referral_rewards.notified_milestone", ensure_reward_milestone_column)
     register("instance_plan_columns", "bot_instances.plan + expires_at", ensure_instance_plan_columns)
+    register("instance_runtime_status", "bot_instances.runtime_status", ensure_instance_runtime_status_column)
     register("redemption_targeted_user", "redemption_codes.targeted_user_id", ensure_redemption_targeted_user_column)
     register("redemption_valid_hours", "redemption_codes.valid_hours", ensure_redemption_valid_hours_column)
     register("clone_settings_migration", "legacy bot_settings -> clone_settings", ensure_clone_settings_migration)
@@ -493,6 +494,14 @@ def ensure_instance_plan_columns() -> None:
         execute("ALTER TABLE bot_instances ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP")
     except Exception:
         logger.exception("instance plan columns migration failed")
+
+
+def ensure_instance_runtime_status_column() -> None:
+    """Track whether a persisted clone is pending, running, stopped, or failed."""
+    try:
+        execute("ALTER TABLE bot_instances ADD COLUMN IF NOT EXISTS runtime_status TEXT DEFAULT 'pending'")
+    except Exception:
+        logger.exception("instance runtime-status migration failed")
 
 
 def ensure_reward_milestone_column() -> None:
