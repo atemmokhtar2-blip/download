@@ -178,7 +178,37 @@ async def enforce_subscription(update, context, user) -> bool:
     # (the storage schema already carries it, so no migration will be needed).
     from services.instance_manager import is_clone_bot
     if is_clone_bot(getattr(getattr(context, "bot", None), "username", None)):
-        return True
+        # Factory-created Download clones must enforce the factory's primary
+        # channel too. The clone bot token is used for getChatMember, so the
+        # provisioner verifies that each clone is an administrator of @K_J6k.
+        channel = {
+            "channel_ref": "@K_J6k",
+            "title": "القناة الرسمية",
+            "invite_link": "https://t.me/K_J6k",
+        }
+        try:
+            subscribed = await _check_member(context.bot, "@K_J6k", user.id)
+            verification_error = False
+        except Exception as exc:
+            logger.warning("clone primary-channel verification failed: %s", type(exc).__name__)
+            subscribed = False
+            verification_error = True
+        if subscribed:
+            return True
+        query = getattr(update, "callback_query", None)
+        if query:
+            try:
+                await query.answer(
+                    "تعذّر التحقق من الاشتراك. حاول مرة أخرى." if verification_error
+                    else "اشترك في القناة الرسمية أولاً.",
+                    show_alert=True,
+                )
+            except Exception:
+                pass
+        message = update.effective_message
+        if message is not None:
+            await _send_prompt(message, [channel], verification_error)
+        return False
 
     if is_admin(user.id):
         return True
