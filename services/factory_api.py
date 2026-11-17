@@ -83,11 +83,6 @@ def _ensure_factory_schema() -> None:
         )
     """)
     pg.execute("ALTER TABLE bot_instances ADD COLUMN IF NOT EXISTS runtime_status TEXT DEFAULT 'pending'")
-    pg.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS download_factory_one_live_instance_per_owner
-        ON bot_instances(owner_id)
-        WHERE status IN ('pending_token', 'active')
-    """)
 
 @app.get("/health")
 async def health():
