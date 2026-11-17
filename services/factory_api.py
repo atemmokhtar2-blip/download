@@ -28,6 +28,15 @@ from services import referral
 log = logging.getLogger("download.factory_api")
 app = FastAPI(title="Download Factory Adapter", docs_url=None, redoc_url=None)
 
+@app.on_event("startup")
+async def initialize_shared_schema() -> None:
+    # The adapter is a separate Railway service, so it cannot assume the
+    # primary polling service initialized the shared PostgreSQL schema first.
+    from database.db import init_db
+    init_db()
+    pg.init_referral_schema()
+    _ensure_factory_schema()
+
 class ProvisionRequest(BaseModel):
     request_id: str = Field(min_length=36, max_length=36)
     owner_telegram_id: int = Field(gt=0)
