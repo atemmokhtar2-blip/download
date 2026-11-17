@@ -160,14 +160,20 @@ async def provision(
         (request_uuid,),
     )
     if prior and prior.get("status") in ("active", "provisioning"):
-        return {
-            "request_id": request_uuid,
-            "instance_id": str(prior.get("instance_id") or ""),
-            "bot_id": prior.get("bot_id"),
-            "bot_username": prior.get("bot_username"),
-            "status": prior.get("status"),
-            "error_code": prior.get("safe_error_code"),
-        }
+        runtime = pg.fetchone(
+            "SELECT runtime_status FROM bot_instances WHERE id=? LIMIT 1",
+            (int(prior["instance_id"]),),
+        ) if prior.get("instance_id") else None
+        runtime_state = str((runtime or {}).get("runtime_status") or "pending")
+        if prior.get("status") == "active" or runtime_state in ("pending", "running"):
+            return {
+                "request_id": request_uuid,
+                "instance_id": str(prior.get("instance_id") or ""),
+                "bot_id": prior.get("bot_id"),
+                "bot_username": prior.get("bot_username"),
+                "status": "active" if runtime_state == "running" else "provisioning",
+                "error_code": prior.get("safe_error_code"),
+            }
 
     try:
         identity = referral._tg_get_me(payload.bot_token)
@@ -183,7 +189,7 @@ async def provision(
         raise HTTPException(409, "bot_token_already_linked")
     if existing_token and instance_id is not None:
         current = referral.get_instance(instance_id) or {}
-        pg.execute("UPDATE bot_instances SET status='active', last_error='' WHERE id=?", (instance_id,))
+        pg.execute("UPDATE bot_instances SET status='active', runtime_status='pending', last_error='' WHERE id=?", (instance_id,))
         pg.execute(
             "UPDATE factory_provision_requests SET bot_id=?, bot_username=?, status='provisioning', safe_error_code=NULL, updated_at=NOW() WHERE request_id=?",
             (current.get("bot_id"), current.get("bot_username") or "", request_uuid),
