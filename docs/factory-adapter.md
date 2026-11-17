@@ -16,8 +16,8 @@ pollers continue to run inside the existing long-running bot thread/event loop.
 
 ## Shared environment
 
-Copy the existing service's PostgreSQL DSN and stable clone encryption key to
-the new API service. The following values must match the main Download worker:
+Keep the existing service's PostgreSQL DSN and stable clone encryption key.
+The following values must be available to the one Download service:
 
 - `NEON_DATABASE_URL` (or `POSTGRES_URL` / `DATABASE_URL`): same PostgreSQL database.
 - `BOT_SECRETS_KEY`: exactly the same stable encryption key used by the main worker.
@@ -25,7 +25,7 @@ the new API service. The following values must match the main Download worker:
 - `FACTORY_SERVICE_SECRET`: a new random secret of at least 32 bytes, also configured on the factory Vercel project.
 
 Keep `ENABLE_CLONE_INSTANCES=1` on the existing long-running Download service.
-The factory API service does not need to run the main Telegram polling process.
+The factory API is part of this same process and does not start a second Telegram poller.
 
 ## Operational behavior
 
