@@ -1,20 +1,18 @@
 # Factory provisioning adapter — Railway deployment
 
-The Download runtime remains the long-running owner of clone pollers. The
-factory API is a separate Railway service from this same repository; it writes
-durable clone records, and the existing Download worker discovers them from
-PostgreSQL.
+The existing Download Railway service remains the only runtime. The factory
+API is mounted inside the existing Gradio/ASGI web process; it writes durable
+clone records, and the existing Download bot process discovers them from
+PostgreSQL and starts each clone in its own event loop. No second Railway
+service, worker, or host is required.
 
-## Add a Railway service
+## Existing Railway service
 
-Create a second service from this repository after merging this branch. Set its
-start command to:
-
-```bash
-uvicorn services.factory_api:app --host 0.0.0.0 --port $PORT
-```
-
-Do not replace the existing Download service command (`python3 app.py`).
+Keep the current Railway service and its existing deployment. Do not create a
+second service and do not change the bot's Telegram polling startup. The
+existing `python3 app.py` entry point now serves the Gradio dashboard and the
+factory provisioning API in the same ASGI process. The bot and all clone
+pollers continue to run inside the existing long-running bot thread/event loop.
 
 ## Shared environment
 
@@ -46,5 +44,4 @@ The factory API service does not need to run the main Telegram polling process.
 
 ## Health
 
-After Railway deploys the new service, check `GET /health`. The endpoint must
-return `{"ok": true}` before the factory adapter URL is configured.
+After the existing Railway service redeploys, check `GET /health` on that same service. The endpoint must return `{"ok": true}` before the factory adapter URL is configured.
