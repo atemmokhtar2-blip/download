@@ -1,4 +1,6 @@
 import gradio as gr
+from fastapi import FastAPI
+import uvicorn
 import threading
 import os
 import sys
@@ -449,10 +451,28 @@ if __name__ == "__main__":
     # media temp dir so a dashboard visitor — or an auth-bypass exploit — can
     # never exfiltrate secrets or user data. show_error=False keeps server
     # tracebacks (paths, env names) out of the browser.
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=server_port,
+    # Serve the factory adapter and the existing Gradio dashboard from ONE
+    # Railway web process. Telegram polling + clone Applications remain in
+    # the existing bot thread/event loop; the API only persists provisioning
+    # records, and instance_sync_worker starts clones in that same bot process.
+    from services import factory_api
+
+    web_app = FastAPI(title="Download Hosting")
+    web_app.include_router(factory_api.app.router)
+
+    @web_app.on_event("startup")
+    async def _initialize_factory_adapter():
+        await factory_api.initialize_shared_schema()
+
+    web_app = gr.mount_gradio_app(
+        web_app,
+        demo,
+        path="/",
         auth=dashboard_auth,
-        show_error=False,
-        allowed_paths=[TEMP_DIR],
+    )
+    uvicorn.run(
+        web_app,
+        host="0.0.0.0",
+        port=server_port,
+        log_level="info",
     )
