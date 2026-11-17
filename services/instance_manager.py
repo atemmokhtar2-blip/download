@@ -154,3 +154,36 @@ async def expire_due_instances() -> int:
 
 def running_instance_ids() -> list[int]:
     return list(_running.keys())
+
+
+
+async def sync_active_instances() -> int:
+    """Discover durable factory-created instances and start missing pollers."""
+    if not ENABLE_CLONE_INSTANCES:
+        return 0
+    try:
+        instances = referral.list_active_instances()
+    except Exception:
+        logger.exception("Could not synchronize active clone instances")
+        return 0
+    started = 0
+    for instance in instances:
+        instance_id = int(instance["id"])
+        if instance_id in _running:
+            continue
+        try:
+            if await spawn_instance(instance):
+                started += 1
+        except Exception as exc:
+            logger.error("Factory clone sync failed id=%s error_type=%s", instance_id, type(exc).__name__)
+    return started
+
+
+async def instance_sync_worker(interval_seconds: int = 20) -> None:
+    """Poll PostgreSQL for new factory instances; the DB remains the source of truth."""
+    while True:
+        try:
+            await sync_active_instances()
+        except Exception:
+            logger.exception("Clone instance sync worker iteration failed")
+        await asyncio.sleep(max(10, min(int(interval_seconds), 120)))
