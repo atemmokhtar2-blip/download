@@ -348,8 +348,9 @@ def _make_post_init(is_clone: bool):
         # Boot the clone network: start every ACTIVE earned instance inside
         # this process (referral schema is already initialized in main()).
         try:
-            from services.instance_manager import start_active_instances
+            from services.instance_manager import start_active_instances, instance_sync_worker
             asyncio.create_task(start_active_instances())
+            asyncio.create_task(instance_sync_worker(interval_seconds=20))
         except Exception:
             system_logger.exception("Clone instance bootstrap failed")
     return post_init

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from html import escape
 
@@ -173,12 +174,55 @@ async def enforce_subscription(update, context, user) -> bool:
     """
     from middlewares.auth import is_admin, is_banned
 
-    # The policy applies to the MAIN bot. Clone instances are out of scope for
-    # now — per-instance channel lists are layered on later via instance_id
-    # (the storage schema already carries it, so no migration will be needed).
+    # Factory-created Download clones use the central Factory bot to verify
+    # membership. This avoids requiring every customer-created clone bot to be
+    # promoted to channel admin. The manager bot must be an admin in @K_J6k.
     from services.instance_manager import is_clone_bot
     if is_clone_bot(getattr(getattr(context, "bot", None), "username", None)):
-        return True
+        from telegram import Bot
+        manager_token = os.getenv("FACTORY_MANAGER_BOT_TOKEN", "").strip()
+        if not manager_token:
+            from config.settings import BOT_TOKEN as manager_token
+            manager_token = str(manager_token or "").strip()
+        if not manager_token:
+            subscribed = False
+            verification_error = True
+        else:
+            manager_bot = Bot(token=manager_token)
+            try:
+                await manager_bot.initialize()
+                subscribed = await _check_member(manager_bot, "@K_J6k", user.id)
+                verification_error = False
+            except Exception as exc:
+                logger.warning("clone primary-channel verification failed: %s", type(exc).__name__)
+                subscribed = False
+                verification_error = True
+            finally:
+                try:
+                    await manager_bot.shutdown()
+                except Exception:
+                    pass
+        channel = {
+            "channel_ref": "@K_J6k",
+            "title": "القناة الرسمية",
+            "invite_link": "https://t.me/K_J6k",
+        }
+        if subscribed:
+            return True
+        query = getattr(update, "callback_query", None)
+        if query:
+            try:
+                await query.answer(
+                    "تعذّر التحقق من الاشتراك. حاول مرة أخرى." if verification_error
+                    else "اشترك في القناة الرسمية أولاً.",
+                    show_alert=True,
+                )
+            except Exception:
+                pass
+        message = update.effective_message
+        if message is not None:
+            await _send_prompt(message, [channel], verification_error)
+        return False
 
     if is_admin(user.id):
         return True

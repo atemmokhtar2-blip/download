@@ -955,6 +955,18 @@ def list_active_instances() -> list[dict]:
     return pg.fetchall("SELECT * FROM bot_instances WHERE status = 'active' ORDER BY id ASC")
 
 
+def set_instance_runtime_status(instance_id: int, status: str, error: str = "") -> None:
+    allowed = {"pending", "running", "stopped", "failed"}
+    value = status if status in allowed else "failed"
+    try:
+        pg.execute(
+            "UPDATE bot_instances SET runtime_status = ?, last_error = ? WHERE id = ?",
+            (value, str(error or "")[:120], int(instance_id)),
+        )
+    except Exception:
+        logger.exception("Could not persist runtime status for instance %s", instance_id)
+
+
 def set_instance_error(instance_id: int, error: str) -> None:
     try:
         pg.execute("UPDATE bot_instances SET last_error = ? WHERE id = ?", (error[:300], int(instance_id)))
