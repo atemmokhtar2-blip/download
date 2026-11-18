@@ -1,12 +1,11 @@
 """Pro-plan fidelity + auto-admin appointment (PostgreSQL).
 
 Covers the owner's spec:
-  * A BASIC code activates a clone with EXACTLY the Basic feature set
-    (70/day, 3 urls, 720p, 192kbps, 7-day history, NO admin panel).
-  * A PRO code activates a clone with EXACTLY the Pro feature set
-    (150/day, 10 urls, best quality, full audio, 90-day history) AND the
-    redeemer is AUTOMATICALLY appointed full-permission admin of their
-    own clone ("يتعين تلقائي أدمن").
+  * BASIC and PRO owners are both automatically registered as full-permission
+    primary admins of their own clone ("يتعين تلقائي أدمن").
+  * The Basic plan still has NO advanced admin panel; its plan limits remain
+    exactly 70/day, 3 urls, 720p, 192kbps and 7-day history.
+  * A PRO clone keeps its advanced panel and the same automatic owner-admin role.
   * The appointment lives ONLY in clone_admins — never in the main bot's
     global admin registry (complete isolation).
   * A basic->pro plan switch appoints the owner instantly.
@@ -186,9 +185,13 @@ def main():
     check("basic audio ceiling 192", blim["audio_cap_kbps"] == 192)
     check("basic history 7d", blim["history_days"] == 7)
     check("basic has NO admin panel", blim["admin_panel"] is False)
-    check("basic activation adds NO clone_admins row", _row(9100002, bid) is None)
+    basic_owner_admin = _row(9100002, bid)
+    check("basic owner AUTO-appointed full-permission admin", basic_owner_admin is not None)
+    check("basic owner has full durable admin permissions",
+          basic_owner_admin and basic_owner_admin["can_ban"]
+          and basic_owner_admin["can_broadcast"] and basic_owner_admin["can_stats"])
     binst = pg.fetchone("SELECT * FROM bot_instances WHERE id = ?", (bid,))
-    check("basic owner still has implicit owner access",
+    check("basic owner retains isolated owner access",
           pp.clone_access(binst, 9100002) == "owner")
 
     # ---- 3b) Code tier is AUTHORITATIVE — never recomputed from referrals
@@ -221,8 +224,12 @@ def main():
           out3.get("plan") == "basic")
     check("code tier is authoritative: Basic never upgrades from referrals",
           out3.get("plan") not in ("pro", ""))
-    check("basic code (malformed payload) adds NO clone_admins row",
-          _row(uid3, int(out3["instance_id"])) is None)
+    malformed_basic_admin = _row(uid3, int(out3["instance_id"]))
+    check("malformed Basic code still auto-appoints primary owner admin",
+          malformed_basic_admin is not None
+          and malformed_basic_admin["can_ban"]
+          and malformed_basic_admin["can_broadcast"]
+          and malformed_basic_admin["can_stats"])
 
     # ---- 4) Upgrade basic -> pro appoints the owner instantly ----
     R.set_instance_plan(bid, "pro")
