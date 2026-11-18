@@ -59,7 +59,10 @@ if "pytest" not in sys.modules:
     pgtest.bootstrap()
 
 from database import pg  # noqa: E402
+from database.db import init_db  # noqa: E402
 
+# Match production startup order before referral migrations inspect core tables.
+init_db()
 pg.init_referral_schema()
 assert pg.backend_name() == "postgres", pg.backend_name()
 
