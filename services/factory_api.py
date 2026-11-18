@@ -36,7 +36,7 @@ async def initialize_shared_schema() -> None:
     _ensure_factory_schema()
 
 class ProvisionRequest(BaseModel):
-    contract_version: int = Field(ge=1, le=1)
+    contract_version: int = Field(default=1, ge=1, le=1)
     request_id: str = Field(min_length=36, max_length=36)
     owner_telegram_id: int = Field(gt=0)
     template: str
