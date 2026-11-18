@@ -1,46 +1,63 @@
-# Factory provisioning adapter — Railway deployment
+# Factory provisioning adapter — existing Railway service
 
-The existing Download Railway service remains the only runtime. The factory
-API is mounted inside the existing Gradio/ASGI web process; it writes durable
-clone records, and the existing Download bot process discovers them from
-PostgreSQL and starts each clone in its own event loop. No second Railway
-service, worker, or host is required.
+The Download Factory adapter runs inside the **existing** Railway service. It
+does not need a second Railway service, a second worker, or a separate host.
+The same `python3 app.py` process serves:
+- the signed Factory API;
+- the existing Gradio control center (when its password is configured);
+- while the existing Telegram bot thread owns the main bot and all clone pollers.
 
-## Existing Railway service
+Factory provisioning writes durable clone records to the same PostgreSQL
+database used by Download. The main bot's existing `instance_sync_worker`
+discovers new active records and starts clone pollers inside its own event
+loop, normally within 20 seconds.
 
-Keep the current Railway service and its existing deployment. Do not create a
-second service and do not change the bot's Telegram polling startup. The
-existing `python3 app.py` entry point now serves the Gradio dashboard and the
-factory provisioning API in the same ASGI process. The bot and all clone
-pollers continue to run inside the existing long-running bot thread/event loop.
+## Required variables on the one Download Railway service
 
-## Shared environment
+- `NEON_DATABASE_URL` (or `POSTGRES_URL` / `DATABASE_URL`): the existing
+  PostgreSQL database used by the main bot and clone instances.
+- `TELEGRAM_BOT_TOKEN`: the main Download bot token. It prevents the main bot
+  itself from being linked as a clone.
+- `FACTORY_SERVICE_SECRET`: at least 32 random characters. It must be the
+  **same exact secret** configured for the Factory Vercel project. Never log
+  or expose this value.
+- `ENABLE_CLONE_INSTANCES=1`: keeps the existing process responsible
+  for starting factory-created clones.
+- `BOT_SECRETS_KEY`: use a stable random value of at least 32 characters.
+  This is strongly required for production durability: clone tokens are
+  encrypted at rest, and this key must not change between restarts/deploys.
 
-Keep the existing service's PostgreSQL DSN and stable clone encryption key.
-The following values must be available to the one Download service:
+`DASHBOARD_PASSWORD` protects only the Gradio control center. When it is
+missing, the dashboard displays a locked notice, but the signed internal
+Factory API remains mounted and available. Configure `DASHBOARD_USERNAME`
+and `DASHBOARD_PASSWORD` to use the control center.
 
-- `NEON_DATABASE_URL` (or `POSTGRES_URL` / `DATABASE_URL`): same PostgreSQL database.
-- `BOT_SECRETS_KEY`: exactly the same stable encryption key used by the main worker.
-- `TELEGRAM_BOT_TOKEN`: main Download bot token, used only to reject linking the main bot as a clone.
-- `FACTORY_SERVICE_SECRET`: a random secret of at least 32 bytes, identical to the value configured on Factory and the other source adapters.
-- `FACTORY_MANAGER_BOT_TOKEN`: the Factory bot token, used to verify users' membership in `@K_J6k`. The Factory bot must be an administrator in that channel.
+The Factory bot performs channel subscription checks before it sends the
+signed provisioning request. Download does not need a separate Factory bot
+token or channel-admin permission.
 
-Keep `ENABLE_CLONE_INSTANCES=1` on the existing long-running Download service.
-The factory API is part of this same process and does not start a second Telegram poller.
+## Internal contract
 
-## Operational behavior
+- `POST /internal/factory/provision` accepts the Factory's HMAC-SHA256
+  signature, a five-minute timestamp window, and the matching idempotency key.
+- `GET /internal/factory/status/{request_id}` reports the durable
+  provisioning state and clone runtime status to the Factory.
+- Bot tokens are encrypted by the existing Download Fernet layer. Raw tokens
+  must never be written to logs or returned by the API.
+- A user can have only one live Download clone, and the same Telegram bot
+  token cannot be linked to multiple clone instances.
+- The existing worker discovers active instances every 20 seconds. Do not
+  start clone polling inside the API process.
 
-- `POST /internal/factory/provision` accepts only signed requests with a
-  five-minute timestamp window and an idempotency key.
-- Bot tokens are stored by the existing Download Fernet encryption layer;
-  raw tokens are never logged.
-- Each owner can have one live Download clone. Telegram bot tokens cannot be
-  linked to more than one instance.
-- The central Factory bot (`FACTORY_MANAGER_BOT_TOKEN`) checks membership in `@K_J6k` for all Download clones. Customer-created clone bots do not need channel administrator rights.
-- The existing Download worker scans PostgreSQL every 20 seconds and starts
-  newly provisioned active instances in its own process. Do not run clone
-  polling in the API service.
+## Health and readiness
 
-## Health
+Open `GET /health` on the existing Railway URL. It returns a safe
+checklist without secret values:
+- `ok` means the PostgreSQL liveness check passed.
+- `ready` means the database, shared Factory secret, main Telegram
+  token, clone runner, and stable clone encryption key are configured.
+- `checks` identifies which requirement is missing; `warnings`
+  contains only check names, never secret values.
 
-After the existing Railway service redeploys, check `GET /health` on that same service. The endpoint must return `{"ok": true}` before the factory adapter URL is configured.
+The Factory endpoint URL configured in the Factory project must be the
+existing Railway URL ending with `/internal/factory/provision`.

@@ -75,6 +75,9 @@ _ORIGINAL_PG_DSN = pg.PG_DSN
 _DB_NAME = "xd_redemption_codes"
 pg.PG_DSN = pgtest.create_test_database(_DB_NAME)
 
+# Match production startup order: base tables before referral migrations.
+from database.db import init_db
+init_db()
 pg.init_referral_schema()
 
 import config.settings as cs  # noqa: E402

@@ -42,6 +42,9 @@ def test_referral_schema_migrates_legacy_redemption_codes(monkeypatch):
             executed.append(sql)
             return self
 
+        def fetchall(self):
+            return []
+
     @contextmanager
     def fake_ref_cursor(commit=True):
         yield FakeCursor()
