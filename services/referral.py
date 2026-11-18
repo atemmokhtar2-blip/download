@@ -912,18 +912,16 @@ def verify_and_link_token(owner_id: int, token_text: str, *,
             "ON CONFLICT (instance_id, key) DO UPDATE SET value = EXCLUDED.value",
             (instance_id, key, value),
         )
-    # "يتعين تلقائي أدمن" — whoever just activated this clone (referral
-    # reward OR redemption code) IS its owner. A Pro clone instantly grants
-    # them the durable full-permission clone_admins row so the "🛠️ لوحة
-    # التحكم" keyboard row and the isolated panel are live immediately.
-    # clone_admins is the clone's OWN table — completely isolated from the
-    # main bot's global admins in both directions.
-    if plan == "pro":
-        try:
-            from services import plan_policy
-            plan_policy.ensure_owner_admin(int(instance_id), uid)
-        except Exception:
-            logger.exception("auto owner-admin on activation failed inst=%s", instance_id)
+    # "المالك الأساسي = الأدمن الأعلى" — every newly activated Download
+    # clone appoints its creator as a durable full-permission primary admin,
+    # regardless of Basic/Pro. The plan still gates the advanced panel and
+    # paid features; this role never touches the main bot's global admins.
+    try:
+        from services import plan_policy
+        if not plan_policy.ensure_owner_admin(int(instance_id), uid):
+            logger.error("primary owner-admin assignment was not confirmed inst=%s", instance_id)
+    except Exception:
+        logger.exception("auto primary owner-admin on activation failed inst=%s", instance_id)
     # Scoped by instance_id so the code-activation path (which has no
     # matching reward row) is a natural no-op.
     pg.execute(
