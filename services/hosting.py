@@ -20,7 +20,10 @@ def create_hosting_app(*, dashboard: gr.Blocks, dashboard_auth, temp_dir: str) -
         yield
 
     web_app = FastAPI(title="Download Hosting", lifespan=lifespan)
-    web_app.include_router(factory_api.router)
+    # Register the Factory API route objects before Gradio mounts its root
+    # path. This preserves exact paths and handler dependencies while avoiding
+    # a nested FastAPI router/app being swallowed by the root mount.
+    web_app.router.routes.extend(factory_api.router.routes)
 
     return gr.mount_gradio_app(
         web_app,
