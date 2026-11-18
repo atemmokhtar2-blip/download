@@ -25,7 +25,6 @@ from services import referral
 log = logging.getLogger("download.factory_api")
 app = FastAPI(title="Download Factory Adapter", docs_url=None, redoc_url=None)
 
-@app.on_event("startup")
 async def initialize_shared_schema() -> None:
     # The Factory API and Telegram clone pollers share this one Railway
     # process and the same PostgreSQL database. Initialise idempotently before
