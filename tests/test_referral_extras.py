@@ -66,8 +66,9 @@ if not os.environ.get("NEON_DATABASE_URL"):
 from database import pg  # noqa: E402
 from database import db as dbm  # noqa: E402
 
-pg.init_referral_schema()
+# Match production startup order before referral migrations inspect core tables.
 dbm.init_db()
+pg.init_referral_schema()
 
 
 def _scrub_test_rows() -> None:
