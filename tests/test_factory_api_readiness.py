@@ -84,8 +84,10 @@ def test_factory_provision_contract_requires_version_one():
         "template": "download",
         "bot_token": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_ab",
     }
-    with pytest.raises(ValidationError):
-        factory_api.ProvisionRequest.model_validate(base)
+    # Old Factory clients omit the version during a rolling deploy; the
+    # adapter treats omission as v1. New Factory clients send v1 explicitly.
+    legacy_request = factory_api.ProvisionRequest.model_validate(base)
+    assert legacy_request.contract_version == 1
     request = factory_api.ProvisionRequest.model_validate({**base, "contract_version": 1})
     assert request.contract_version == 1
     with pytest.raises(ValidationError):
