@@ -1523,9 +1523,11 @@ async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT
     q_line = "أعلى جودة متاحة" if not lim["max_video_height"] else f"{lim['max_video_height']}p كحد أقصى"
     a_line = "320kbps كامل" if not lim["audio_cap_kbps"] else f"{lim['audio_cap_kbps']}kbps كحد أقصى"
     panel_line = (
-        "• لوحة إدارة خاصة: ✅ <b>تم تعيينك مديرًا لنسختك تلقائيًا</b> — «🛠️ لوحة التحكم» داخل بوتك\n"
+        "• المدير الأساسي: ✅ <b>تم تعيينك تلقائيًا بصلاحيات كاملة داخل نسختك</b>\\n"
+        "• لوحة التحكم المتقدمة: ✅ متاحة على خطة Pro\\n"
         if _plan == "pro" else
-        "• لوحة إدارة خاصة: ❌ غير متوفرة (تتوفر مع خطة 👑 Pro)\n"
+        "• المدير الأساسي: ✅ <b>تم تعيينك تلقائيًا بصلاحيات كاملة داخل نسختك</b>\\n"
+        "• لوحة التحكم المتقدمة: ❌ غير متاحة في Basic (تتوفر مع Pro)\\n"
     )
     feats = (
         f"📋 <b>مميزات خطة {plan_badge} — مطبقة تلقائيًا بالكامل داخل نسختك:</b>\n"

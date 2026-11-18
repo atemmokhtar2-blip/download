@@ -61,3 +61,33 @@ checklist without secret values:
 
 The Factory endpoint URL configured in the Factory project must be the
 existing Railway URL ending with `/internal/factory/provision`.
+
+
+## Automatic primary admin for every Download copy
+
+The Telegram user who requests a Download copy is the primary owner and is
+automatically inserted into that clone's own `clone_admins` table with all
+three owner permissions (`can_ban`, `can_broadcast`, and `can_stats`) for
+both Basic and Pro activations. The assignment is idempotent and is re-applied
+during a retried factory provisioning request.
+
+The Download adapter verifies that the row exists with all permissions before
+it reports a successful provisioning response. The response includes
+`contract_version: 1`, `primary_admin_id`, and `owner_admin_confirmed`.
+The Factory validates those fields against the requesting Telegram account.
+The status endpoint reports the same owner-admin attestation.
+
+This role is scoped to that individual clone and does not grant access to the
+main Download bot's global admin registry. Plan entitlements remain separate:
+Basic owners keep their owner role but do not receive the Pro admin panel;
+the advanced clone control panel remains a Pro-only feature.
+
+
+### Rolling-deployment compatibility
+
+For a safe sequential rollout, the Download adapter defaults a missing request
+`contract_version` to version 1. This keeps the currently deployed Factory
+client working while the adapter is deployed first. The updated Factory client
+sends version 1 explicitly and still rejects any response that omits or
+misstates the version or owner-admin attestation. Future incompatible contracts
+must use an explicit version migration rather than silently changing v1.

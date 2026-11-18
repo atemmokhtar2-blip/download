@@ -73,3 +73,53 @@ def test_authentication_accepts_factory_hmac_signature(monkeypatch):
     ).hexdigest()
 
     factory_api._authenticate(timestamp, signature, method, path, body)
+
+
+def test_factory_provision_contract_requires_version_one():
+    from pydantic import ValidationError
+
+    base = {
+        "request_id": "11111111-1111-4111-8111-111111111111",
+        "owner_telegram_id": 12345,
+        "template": "download",
+        "bot_token": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_ab",
+    }
+    # Old Factory clients omit the version during a rolling deploy; the
+    # adapter treats omission as v1. New Factory clients send v1 explicitly.
+    legacy_request = factory_api.ProvisionRequest.model_validate(base)
+    assert legacy_request.contract_version == 1
+    request = factory_api.ProvisionRequest.model_validate({**base, "contract_version": 1})
+    assert request.contract_version == 1
+    with pytest.raises(ValidationError):
+        factory_api.ProvisionRequest.model_validate({**base, "contract_version": 2})
+
+
+def test_factory_attests_owner_as_full_primary_clone_admin(monkeypatch):
+    from services import plan_policy
+
+    monkeypatch.setattr(plan_policy, "ensure_owner_admin", lambda instance_id, owner_id: True)
+    monkeypatch.setattr(plan_policy, "get_clone_admin", lambda instance_id, owner_id: {
+        "user_id": owner_id, "can_ban": True, "can_broadcast": True, "can_stats": True,
+    })
+    assert factory_api._ensure_primary_admin(77, 12345) is True
+
+
+def test_factory_rejects_partial_or_wrong_primary_admin_attestation(monkeypatch):
+    from services import plan_policy
+
+    monkeypatch.setattr(plan_policy, "ensure_owner_admin", lambda instance_id, owner_id: True)
+    monkeypatch.setattr(plan_policy, "get_clone_admin", lambda instance_id, owner_id: {
+        "user_id": owner_id, "can_ban": True, "can_broadcast": False, "can_stats": True,
+    })
+    assert factory_api._ensure_primary_admin(77, 12345) is False
+    monkeypatch.setattr(plan_policy, "get_clone_admin", lambda instance_id, owner_id: {
+        "user_id": owner_id + 1, "can_ban": True, "can_broadcast": True, "can_stats": True,
+    })
+    assert factory_api._ensure_primary_admin(77, 12345) is False
+
+
+def test_factory_copies_receive_pro_entitlement_without_changing_main_bot_policy(monkeypatch):
+    monkeypatch.setattr(factory_api.referral, "clone_plan_days", lambda plan: 45)
+    assert factory_api._factory_clone_entitlement() == ("pro", 45)
+    # The helper is deliberately scoped to the Factory adapter; the main-bot
+    # issuance path is not changed by this policy.
