@@ -116,3 +116,11 @@ def test_factory_rejects_partial_or_wrong_primary_admin_attestation(monkeypatch)
         "user_id": owner_id + 1, "can_ban": True, "can_broadcast": True, "can_stats": True,
     })
     assert factory_api._ensure_primary_admin(77, 12345) is False
+
+
+def test_factory_copies_receive_pro_entitlement_without_changing_main_bot_policy(monkeypatch):
+    monkeypatch.setattr(factory_api.referral, "clone_plan_days", lambda plan: 45)
+    assert factory_api._factory_clone_entitlement() == ("pro", 45)
+    # The helper is deliberately scoped to the Factory adapter. The ordinary
+    # main-bot/referral issuance path keeps its existing plan-selection rules.
+    assert factory_api.referral.clone_plan_days("basic") == 30 if hasattr(factory_api.referral, "clone_plan_days") else True
