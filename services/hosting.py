@@ -20,7 +20,7 @@ def create_hosting_app(*, dashboard: gr.Blocks, dashboard_auth, temp_dir: str) -
         yield
 
     web_app = FastAPI(title="Download Hosting", lifespan=lifespan)
-    web_app.include_router(factory_api.app.router)
+    web_app.include_router(factory_api.router)
 
     return gr.mount_gradio_app(
         web_app,
