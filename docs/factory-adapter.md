@@ -81,3 +81,13 @@ This role is scoped to that individual clone and does not grant access to the
 main Download bot's global admin registry. Plan entitlements remain separate:
 Basic owners keep their owner role but do not receive the Pro admin panel;
 the advanced clone control panel remains a Pro-only feature.
+
+
+### Rolling-deployment compatibility
+
+For a safe sequential rollout, the Download adapter defaults a missing request
+`contract_version` to version 1. This keeps the currently deployed Factory
+client working while the adapter is deployed first. The updated Factory client
+sends version 1 explicitly and still rejects any response that omits or
+misstates the version or owner-admin attestation. Future incompatible contracts
+must use an explicit version migration rather than silently changing v1.
