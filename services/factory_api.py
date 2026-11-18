@@ -15,7 +15,7 @@ import re
 import time
 import uuid
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,7 @@ from services import referral
 
 log = logging.getLogger("download.factory_api")
 app = FastAPI(title="Download Factory Adapter", docs_url=None, redoc_url=None)
+router = APIRouter()
 
 async def initialize_shared_schema() -> None:
     # The Factory API and Telegram clone pollers share this one Railway
@@ -75,7 +76,7 @@ def _ensure_factory_schema() -> None:
     """)
     pg.execute("ALTER TABLE bot_instances ADD COLUMN IF NOT EXISTS runtime_status TEXT DEFAULT 'pending'")
 
-@app.get("/health")
+@router.get("/health")
 async def health():
     """Safe liveness/readiness diagnostics; never return secret values."""
     checks = {
@@ -102,7 +103,7 @@ async def health():
         return JSONResponse(payload, status_code=503)
     return payload
 
-@app.get("/internal/factory/status/{request_id}")
+@router.get("/internal/factory/status/{request_id}")
 async def status(
     request_id: str,
     request: Request,
@@ -139,7 +140,7 @@ async def status(
     }
 
 
-@app.post("/internal/factory/provision")
+@router.post("/internal/factory/provision")
 async def provision(
     request: Request,
     x_factory_timestamp: str = Header(default=""),
@@ -270,3 +271,7 @@ async def provision(
             (instance_id, request_uuid),
         )
         raise HTTPException(503, "provisioning_unavailable")
+
+# Keep a standalone FastAPI app available, while the production host can
+# include the router directly before mounting Gradio at the root path.
+app.include_router(router)
