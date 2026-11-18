@@ -159,7 +159,8 @@ async def status(
     ) or {}
     runtime_status = str(runtime.get("runtime_status") or "pending")
     mapped = "active" if runtime_status == "running" else "failed" if runtime_status == "failed" else "provisioning"
-    error_code = str(runtime.get("last_error") or row.get("safe_error_code") or "")[:80] or None
+    raw_error_code = str(runtime.get("last_error") or row.get("safe_error_code") or "")
+    error_code = raw_error_code if re.fullmatch(r"[a-zA-Z0-9_]{1,80}", raw_error_code) else None
     owner_id = int(row.get("owner_telegram_id") or 0)
     owner_admin_confirmed = _primary_admin_is_confirmed(int(row["instance_id"]), owner_id)
     return {
@@ -204,8 +205,8 @@ async def provision(
     )
     if prior and int(prior.get("owner_telegram_id") or 0) != payload.owner_telegram_id:
         raise HTTPException(409, "request_owner_mismatch")
-    if prior and prior.get("status") in ("active", "provisioning"):
-        if prior.get("instance_id") and not _ensure_primary_admin(
+    if prior and prior.get("status") in ("active", "provisioning") and prior.get("instance_id"):
+        if not _ensure_primary_admin(
             int(prior["instance_id"]), payload.owner_telegram_id
         ):
             pg.execute(
@@ -216,9 +217,9 @@ async def provision(
         runtime = pg.fetchone(
             "SELECT runtime_status FROM bot_instances WHERE id=? LIMIT 1",
             (int(prior["instance_id"]),),
-        ) if prior.get("instance_id") else None
+        )
         runtime_state = str((runtime or {}).get("runtime_status") or "pending")
-        if prior.get("status") == "active" or runtime_state in ("pending", "running"):
+        if runtime_state in ("pending", "running"):
             return {
                 "contract_version": 1,
                 "request_id": request_uuid,
