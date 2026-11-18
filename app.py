@@ -1,5 +1,4 @@
 import gradio as gr
-from fastapi import FastAPI
 import uvicorn
 import threading
 import os
@@ -436,60 +435,41 @@ if __name__ == "__main__":
     dash_user = os.getenv("DASHBOARD_USERNAME", "admin").strip() or "admin"
     dash_pass = os.getenv("DASHBOARD_PASSWORD", "").strip()
     if not dash_pass:
-        # Keep the Railway web service healthy without exposing dashboard data.
-        # The Telegram bot already runs in its own daemon thread. Serve only a
-        # minimal public lock notice until the owner configures the password.
+        # The admin dashboard stays locked, but the signed internal Factory API
+        # must remain mounted so provisioning is independent from UI access.
         logger.error(
             "Dashboard is locked: DASHBOARD_PASSWORD is missing. "
-            "Set it as a Railway deployment secret to enable the control center."
+            "The Factory API remains available; set DASHBOARD_PASSWORD to "
+            "enable the authenticated control center."
         )
-        with gr.Blocks(title="X Downloader — Dashboard Locked") as locked_demo:
+        with gr.Blocks(title="X Downloader — Dashboard Locked") as dashboard:
             gr.Markdown(
                 """
 # X Downloader Control Center
 ## Dashboard temporarily locked
 
-The Telegram bot is running independently. The web control center is disabled
-until the owner configures the DASHBOARD_PASSWORD deployment secret.
+The Telegram bot and the private Factory adapter are running independently.
+The web control center is disabled until the owner configures the
+DASHBOARD_PASSWORD deployment secret.
 
 This page does not expose user data, metrics, configuration, or admin controls.
                 """
             )
-        locked_demo.launch(
-            server_name="0.0.0.0",
-            server_port=server_port,
-            show_error=False,
-        )
-        sys.exit(0)
+        dashboard_auth = None
+    else:
+        dashboard = demo
+        dashboard_auth = (dash_user, dash_pass)
 
-    dashboard_auth = (dash_user, dash_pass)
+    logger.info("Starting Download ASGI host on 0.0.0.0:%s", server_port)
+    # One existing Railway process serves the signed Factory API and the
+    # optional Gradio dashboard. Clone pollers remain in the existing bot
+    # thread/event loop; no second Railway service or Telegram poller is used.
+    from services.hosting import create_hosting_app
 
-    logger.info("Starting Gradio server on 0.0.0.0:%s", server_port)
-    # Hardening: Gradio's /file= endpoint can otherwise serve ANY file under the
-    # app directory (e.g. .env, cookies.txt, database/*.db). Restrict it to the
-    # media temp dir so a dashboard visitor — or an auth-bypass exploit — can
-    # never exfiltrate secrets or user data. show_error=False keeps server
-    # tracebacks (paths, env names) out of the browser.
-    # Serve the factory adapter and the existing Gradio dashboard from ONE
-    # Railway web process. Telegram polling + clone Applications remain in
-    # the existing bot thread/event loop; the API only persists provisioning
-    # records, and instance_sync_worker starts clones in that same bot process.
-    from services import factory_api
-
-    web_app = FastAPI(title="Download Hosting")
-    web_app.include_router(factory_api.app.router)
-
-    @web_app.on_event("startup")
-    async def _initialize_factory_adapter():
-        await factory_api.initialize_shared_schema()
-
-    web_app = gr.mount_gradio_app(
-        web_app,
-        demo,
-        path="/",
-        auth=dashboard_auth,
-        show_error=False,
-        allowed_paths=[TEMP_DIR],
+    web_app = create_hosting_app(
+        dashboard=dashboard,
+        dashboard_auth=dashboard_auth,
+        temp_dir=TEMP_DIR,
     )
     uvicorn.run(
         web_app,
