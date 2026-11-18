@@ -17,7 +17,7 @@ def test_health_reports_factory_readiness_without_exposing_secret(monkeypatch):
     monkeypatch.setenv("FACTORY_SERVICE_SECRET", secret)
     monkeypatch.setenv("ENABLE_CLONE_INSTANCES", "1")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "main-bot-token")
-    monkeypatch.setenv("BOT_SECRETS_KEY", "stable-encryption-key")
+    monkeypatch.setenv("BOT_SECRETS_KEY", "stable-encryption-key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
     monkeypatch.setattr(factory_api.pg, "fetchone", lambda *_args, **_kwargs: {"ok": 1})
 
     result = asyncio.run(factory_api.health())
@@ -38,7 +38,7 @@ def test_health_exposes_missing_factory_configuration_as_readiness_warning(monke
     monkeypatch.delenv("FACTORY_SERVICE_SECRET", raising=False)
     monkeypatch.setenv("ENABLE_CLONE_INSTANCES", "1")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "main-bot-token")
-    monkeypatch.setenv("BOT_SECRETS_KEY", "stable-encryption-key")
+    monkeypatch.setenv("BOT_SECRETS_KEY", "stable-encryption-key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
     monkeypatch.setattr(factory_api.pg, "fetchone", lambda *_args, **_kwargs: {"ok": 1})
 
     result = asyncio.run(factory_api.health())
@@ -67,8 +67,8 @@ def test_authentication_accepts_factory_hmac_signature(monkeypatch):
     monkeypatch.setenv("FACTORY_SERVICE_SECRET", secret)
     signature = hmac.new(
         secret.encode(),
-        timestamp.encode() + b"\\n" + method.encode() + b"\\n" +
-        path.encode() + b"\\n" + body,
+        timestamp.encode() + b"\n" + method.encode() + b"\n" +
+        path.encode() + b"\n" + body,
         hashlib.sha256,
     ).hexdigest()
 
