@@ -43,6 +43,11 @@ class ProvisionRequest(BaseModel):
     bot_token: str = Field(min_length=30, max_length=200)
 
 
+def _factory_clone_entitlement() -> tuple[str, int]:
+    """Factory-issued copies are Pro at no charge; main-bot issuance is unchanged."""
+    return "pro", referral.clone_plan_days("pro")
+
+
 def _primary_admin_is_confirmed(instance_id: int, owner_id: int) -> bool:
     """Read the clone-local primary-admin record; never inspect global admins."""
     try:
@@ -278,17 +283,18 @@ async def provision(
     try:
         if instance_id is None:
             instance_id = pg.insert_returning_id(
-                "INSERT INTO bot_instances(owner_id, status, plan) VALUES (?, 'pending_token', 'basic')",
+                "INSERT INTO bot_instances(owner_id, status, plan) VALUES (?, 'pending_token', 'pro')",
                 (payload.owner_telegram_id,),
             )
         else:
             pg.execute("UPDATE bot_instances SET status='pending_token', last_error='' WHERE id=?", (instance_id,))
+        factory_plan, factory_days = _factory_clone_entitlement()
         result = referral.verify_and_link_token(
             payload.owner_telegram_id,
             payload.bot_token,
             instance_id=instance_id,
-            plan="basic",
-            days=30,
+            plan=factory_plan,
+            days=factory_days,
         )
         if not result.get("ok"):
             pg.execute("UPDATE bot_instances SET status='failed', last_error=? WHERE id=?",
