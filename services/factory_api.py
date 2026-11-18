@@ -36,10 +36,40 @@ async def initialize_shared_schema() -> None:
     _ensure_factory_schema()
 
 class ProvisionRequest(BaseModel):
+    contract_version: int = Field(ge=1, le=1)
     request_id: str = Field(min_length=36, max_length=36)
     owner_telegram_id: int = Field(gt=0)
     template: str
     bot_token: str = Field(min_length=30, max_length=200)
+
+
+def _primary_admin_is_confirmed(instance_id: int, owner_id: int) -> bool:
+    """Read the clone-local primary-admin record; never inspect global admins."""
+    try:
+        from services import plan_policy
+        row = plan_policy.get_clone_admin(int(instance_id), int(owner_id))
+        return bool(
+            row
+            and int(row.get("user_id") or 0) == int(owner_id)
+            and row.get("can_ban")
+            and row.get("can_broadcast")
+            and row.get("can_stats")
+        )
+    except Exception:
+        log.exception("factory_primary_admin_attestation_read_failed instance=%s", instance_id)
+        return False
+
+
+def _ensure_primary_admin(instance_id: int, owner_id: int) -> bool:
+    """Idempotently assign and then verify all owner permissions in this clone."""
+    try:
+        from services import plan_policy
+        if not plan_policy.ensure_owner_admin(int(instance_id), int(owner_id)):
+            return False
+        return _primary_admin_is_confirmed(instance_id, owner_id)
+    except Exception:
+        log.exception("factory_primary_admin_assignment_failed instance=%s", instance_id)
+        return False
 
 def _authenticate(timestamp: str, signature: str, method: str, path: str, body: bytes) -> None:
     secret = os.getenv("FACTORY_SERVICE_SECRET", "")
@@ -117,7 +147,7 @@ async def status(
         raise HTTPException(400, "invalid_request")
     _ensure_factory_schema()
     row = pg.fetchone(
-        "SELECT instance_id, bot_id, bot_username, status, safe_error_code "
+        "SELECT instance_id, owner_telegram_id, bot_id, bot_username, status, safe_error_code "
         "FROM factory_provision_requests WHERE request_id=? LIMIT 1",
         (request_uuid,),
     )
@@ -130,12 +160,17 @@ async def status(
     runtime_status = str(runtime.get("runtime_status") or "pending")
     mapped = "active" if runtime_status == "running" else "failed" if runtime_status == "failed" else "provisioning"
     error_code = str(runtime.get("last_error") or row.get("safe_error_code") or "")[:80] or None
+    owner_id = int(row.get("owner_telegram_id") or 0)
+    owner_admin_confirmed = _primary_admin_is_confirmed(int(row["instance_id"]), owner_id)
     return {
+        "contract_version": 1,
         "request_id": request_uuid,
         "instance_id": str(row["instance_id"]),
         "bot_id": row.get("bot_id"),
         "bot_username": row.get("bot_username"),
         "status": mapped,
+        "primary_admin_id": owner_id if owner_admin_confirmed else None,
+        "owner_admin_confirmed": owner_admin_confirmed,
         "error_code": error_code,
     }
 
@@ -154,6 +189,8 @@ async def provision(
         request_uuid = str(uuid.UUID(payload.request_id))
     except Exception:
         raise HTTPException(400, "invalid_request")
+    if payload.contract_version != 1:
+        raise HTTPException(400, "unsupported_contract_version")
     if payload.template != "download":
         raise HTTPException(400, "template_mismatch")
     if idempotency_key != request_uuid:
@@ -168,6 +205,14 @@ async def provision(
     if prior and int(prior.get("owner_telegram_id") or 0) != payload.owner_telegram_id:
         raise HTTPException(409, "request_owner_mismatch")
     if prior and prior.get("status") in ("active", "provisioning"):
+        if prior.get("instance_id") and not _ensure_primary_admin(
+            int(prior["instance_id"]), payload.owner_telegram_id
+        ):
+            pg.execute(
+                "UPDATE factory_provision_requests SET status='failed', safe_error_code='owner_admin_assignment_failed', updated_at=NOW() WHERE request_id=?",
+                (request_uuid,),
+            )
+            raise HTTPException(503, "owner_admin_assignment_failed")
         runtime = pg.fetchone(
             "SELECT runtime_status FROM bot_instances WHERE id=? LIMIT 1",
             (int(prior["instance_id"]),),
@@ -175,11 +220,14 @@ async def provision(
         runtime_state = str((runtime or {}).get("runtime_status") or "pending")
         if prior.get("status") == "active" or runtime_state in ("pending", "running"):
             return {
+                "contract_version": 1,
                 "request_id": request_uuid,
                 "instance_id": str(prior.get("instance_id") or ""),
                 "bot_id": prior.get("bot_id"),
                 "bot_username": prior.get("bot_username"),
                 "status": "active" if runtime_state == "running" else "provisioning",
+                "primary_admin_id": payload.owner_telegram_id,
+                "owner_admin_confirmed": True,
                 "error_code": prior.get("safe_error_code"),
             }
 
@@ -193,6 +241,8 @@ async def provision(
     if existing_token and (instance_id is None or int(existing_token["instance_id"]) != instance_id):
         raise HTTPException(409, "bot_token_already_linked")
     if existing_token and instance_id is not None:
+        if not _ensure_primary_admin(instance_id, payload.owner_telegram_id):
+            raise HTTPException(503, "owner_admin_assignment_failed")
         current = referral.get_instance(instance_id) or {}
         pg.execute("UPDATE bot_instances SET status='active', runtime_status='pending', last_error='' WHERE id=?", (instance_id,))
         pg.execute(
@@ -200,9 +250,12 @@ async def provision(
             (current.get("bot_id"), current.get("bot_username") or "", request_uuid),
         )
         return {
+            "contract_version": 1,
             "request_id": request_uuid, "instance_id": str(instance_id),
             "bot_id": current.get("bot_id"), "bot_username": current.get("bot_username"),
             "status": "provisioning",
+            "primary_admin_id": payload.owner_telegram_id,
+            "owner_admin_confirmed": True,
         }
 
     existing = referral.get_instance_by_owner(payload.owner_telegram_id)
@@ -244,6 +297,16 @@ async def provision(
                 (instance_id, str(result.get("reason") or "provision_failed")[:80], request_uuid),
             )
             raise HTTPException(422, "download_instance_rejected")
+        if not _ensure_primary_admin(instance_id, payload.owner_telegram_id):
+            pg.execute(
+                "UPDATE bot_instances SET status='failed', last_error='owner_admin_assignment_failed' WHERE id=?",
+                (instance_id,),
+            )
+            pg.execute(
+                "UPDATE factory_provision_requests SET instance_id=?, status='failed', safe_error_code='owner_admin_assignment_failed', updated_at=NOW() WHERE request_id=?",
+                (instance_id, request_uuid),
+            )
+            raise HTTPException(503, "owner_admin_assignment_failed")
         pg.execute(
             "UPDATE factory_provision_requests SET instance_id=?, bot_id=?, bot_username=?, status='provisioning', updated_at=NOW() WHERE request_id=?",
             (instance_id, result["bot_id"], result.get("bot_username") or "", request_uuid),
@@ -251,11 +314,14 @@ async def provision(
         log.info("factory_instance_reserved owner=%s instance=%s bot=%s",
                  payload.owner_telegram_id, instance_id, result["bot_id"])
         return {
+            "contract_version": 1,
             "request_id": request_uuid,
             "instance_id": str(instance_id),
             "bot_id": result["bot_id"],
             "bot_username": result.get("bot_username"),
             "status": "provisioning",
+            "primary_admin_id": payload.owner_telegram_id,
+            "owner_admin_confirmed": True,
         }
     except HTTPException:
         raise
