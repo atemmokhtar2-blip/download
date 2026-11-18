@@ -27,8 +27,9 @@ app = FastAPI(title="Download Factory Adapter", docs_url=None, redoc_url=None)
 
 @app.on_event("startup")
 async def initialize_shared_schema() -> None:
-    # The adapter is a separate Railway service, so it cannot assume the
-    # primary polling service initialized the shared PostgreSQL schema first.
+    # The Factory API and Telegram clone pollers share this one Railway
+    # process and the same PostgreSQL database. Initialise idempotently before
+    # the API accepts provisioning requests.
     from database.db import init_db
     init_db()
     pg.init_referral_schema()
@@ -42,7 +43,9 @@ class ProvisionRequest(BaseModel):
 
 def _authenticate(timestamp: str, signature: str, method: str, path: str, body: bytes) -> None:
     secret = os.getenv("FACTORY_SERVICE_SECRET", "")
-    if len(secret) < 32 or not re.fullmatch(r"\d{10,13}", timestamp or ""):
+    if len(secret) < 32:
+        raise HTTPException(503, "service_configuration_missing")
+    if not re.fullmatch(r"\d{10,13}", timestamp or ""):
         raise HTTPException(401, "unauthorized")
     millis = int(timestamp) if len(timestamp) == 13 else int(timestamp) * 1000
     if abs(int(time.time() * 1000) - millis) > 300_000:
@@ -75,11 +78,30 @@ def _ensure_factory_schema() -> None:
 
 @app.get("/health")
 async def health():
+    """Safe liveness/readiness diagnostics; never return secret values."""
+    checks = {
+        "database": False,
+        "factory_service_secret": len(os.getenv("FACTORY_SERVICE_SECRET", "")) >= 32,
+        "clone_instances_enabled": os.getenv("ENABLE_CLONE_INSTANCES", "1") == "1",
+        "main_bot_token": bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip()),
+        "stable_clone_encryption_key": len(os.getenv("BOT_SECRETS_KEY", "")) >= 32,
+    }
     try:
-        pg.fetchone("SELECT 1 AS ok")
-        return {"ok": True, "service": "download-factory-adapter"}
-    except Exception:
-        return JSONResponse({"ok": False}, status_code=503)
+        checks["database"] = bool(pg.fetchone("SELECT 1 AS ok"))
+    except Exception as exc:
+        log.warning("factory_adapter_healthcheck_failed error_type=%s", type(exc).__name__)
+
+    ready = all(checks.values())
+    payload = {
+        "ok": checks["database"],
+        "ready": ready,
+        "service": "download-factory-adapter",
+        "checks": checks,
+        "warnings": [key for key, value in checks.items() if not value],
+    }
+    if not checks["database"]:
+        return JSONResponse(payload, status_code=503)
+    return payload
 
 @app.get("/internal/factory/status/{request_id}")
 async def status(
