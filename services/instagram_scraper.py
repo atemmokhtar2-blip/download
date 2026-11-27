@@ -13,6 +13,7 @@ Auth boosters:
 """
 from __future__ import annotations
 
+import html as html_lib
 import json
 import logging
 import os
@@ -104,6 +105,10 @@ def _score_result(result: dict | None) -> int:
         score += 90 if ok else -80
         if size > 0:
             score += min(size // 1_000_000, 25)
+    # A real playable stream is stronger evidence than a poster/preview image.
+    # This prevents a fast embed image response from outranking a video result.
+    if media_type == "video" and result.get("play_url"):
+        score += 240
     if result.get("image_url"):
         ok, size, ctype = _probe_media_url(result.get("image_url"), kind="image")
         result["image_probe_ok"] = ok
@@ -253,6 +258,41 @@ def _unescape(u: str) -> str:
         return u.replace("\\/", "/").replace("\\u0026", "&")
 
 
+def _best_media_candidate(items: list | None) -> str | None:
+    """Choose the highest-resolution URL from Instagram's changing media arrays."""
+    candidates = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        candidate = item.get("url") or item.get("src")
+        if not candidate:
+            continue
+        try:
+            width = int(item.get("width") or item.get("config_width") or 0)
+            height = int(item.get("height") or item.get("config_height") or 0)
+        except (TypeError, ValueError):
+            width = height = 0
+        candidates.append((width * height, width, _unescape(str(candidate))))
+    return max(candidates, default=(0, 0, None))[2]
+
+
+def _node_video_url(node: dict) -> str | None:
+    direct = _unescape(node.get("video_url") or "")
+    return direct or _best_media_candidate(
+        node.get("video_versions") or node.get("video_resources")
+    )
+
+
+def _node_image_url(node: dict) -> str | None:
+    direct = _unescape(node.get("display_url") or "")
+    resources = node.get("display_resources") or []
+    best = _best_media_candidate(resources)
+    if not best:
+        image_versions = node.get("image_versions2") or {}
+        best = _best_media_candidate(image_versions.get("candidates") or [])
+    return best or direct
+
+
 def _node_to_result(node: dict, url: str, shortcode: str, source: str) -> dict | None:
     if not isinstance(node, dict):
         return None
@@ -280,29 +320,22 @@ def _node_to_result(node: dict, url: str, shortcode: str, source: str) -> dict |
             c = edge.get("node") or edge
             if not isinstance(c, dict):
                 continue
-            if c.get("is_video") or c.get("__typename") == "GraphVideo":
-                vu = _unescape(c.get("video_url") or "")
+            child_video_url = _node_video_url(c)
+            if c.get("is_video") or c.get("__typename") == "GraphVideo" or child_video_url:
+                vu = child_video_url
                 if not vu:
                     continue
                 album_items.append({
                     "title": f"{title}_{i + 1}",
                     "url": vu,
-                    "thumbnail": _unescape(c.get("display_url") or ""),
+                    "thumbnail": _node_image_url(c) or "",
                     "image_url": None,
                     "type": "video",
                     "id": str(i),
                     "play_url": vu,
                 })
             else:
-                du = _unescape(c.get("display_url") or "")
-                resources = c.get("display_resources") or []
-                if resources:
-                    try:
-                        du = _unescape(sorted(
-                            resources, key=lambda r: int(r.get("config_width") or 0)
-                        )[-1].get("src") or du)
-                    except Exception:
-                        pass
+                du = _node_image_url(c) or ""
                 if not du:
                     continue
                 album_items.append({
@@ -321,25 +354,17 @@ def _node_to_result(node: dict, url: str, shortcode: str, source: str) -> dict |
             elif album_items:
                 media_type, image_url = "image", album_items[0]["image_url"]
                 album_items = []
-    elif node.get("is_video") or typename == "GraphVideo":
+    elif node.get("is_video") or typename == "GraphVideo" or _node_video_url(node):
         media_type = "video"
-        play_url = _unescape(node.get("video_url") or "")
-        image_url = _unescape(node.get("display_url") or "")
+        play_url = _node_video_url(node)
+        image_url = _node_image_url(node)
         try:
             duration_secs = int(float(node.get("video_duration") or 0))
         except Exception:
             duration_secs = 0
     else:
         media_type = "image"
-        image_url = _unescape(node.get("display_url") or "")
-        resources = node.get("display_resources") or []
-        if resources:
-            try:
-                image_url = _unescape(sorted(
-                    resources, key=lambda r: int(r.get("config_width") or 0)
-                )[-1].get("src") or image_url)
-            except Exception:
-                pass
+        image_url = _node_image_url(node)
 
     if not (image_url or play_url or album_items):
         return None
@@ -444,6 +469,37 @@ def _from_public_api(shortcode: str, url: str) -> dict | None:
         return None
 
 
+def _extract_embed_video(html: str) -> tuple[str | None, bool]:
+    """Extract an actual video stream and separately detect video-post evidence."""
+    source = html or ""
+    patterns = (
+        r'"video_url"\s*:\s*"(https:[^"]+)"',
+        r'video_url\\":\\"(https:[^\\"]+)',
+        r'<meta[^>]+(?:property|name)=["\'](?:og:video(?::url)?|twitter:player:stream)["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:video(?::url)?|twitter:player:stream)["\']',
+        r'"contentUrl"\s*:\s*"(https:[^"]+)"',
+        r'<video[^>]+src=["\']([^"\']+)'
+    )
+    video = None
+    for pattern in patterns:
+        match = re.search(pattern, source, flags=re.IGNORECASE)
+        if match:
+            candidate = html_lib.unescape(_unescape(match.group(1))).replace("\\/", "/")
+            if candidate.startswith("//"):
+                candidate = "https:" + candidate
+            if candidate.startswith("https://"):
+                video = candidate
+                break
+
+    video_signal = bool(video) or bool(re.search(
+        r'"(?:is_video|isVideo)"\s*:\s*true|'
+        r'"__typename"\s*:\s*"GraphVideo"|'
+        r'<meta[^>]+(?:og:type|twitter:card)[^>]+content=["\'](?:video|player)',
+        source, flags=re.IGNORECASE,
+    ))
+    return video, video_signal
+
+
 def _from_embed(shortcode: str, url: str) -> dict | None:
     for path in (
         f"/p/{shortcode}/embed/captioned/",
@@ -453,28 +509,26 @@ def _from_embed(shortcode: str, url: str) -> dict | None:
     ):
         try:
             r = _http_get(f"https://www.instagram.com{path}", timeout=20)
-            html = getattr(r, "text", "") or ""
-            if len(html) < 500:
+            page_html = getattr(r, "text", "") or ""
+            if len(page_html) < 300:
                 continue
-            video = image = None
-            for pat in (
-                r'"video_url"\s*:\s*"(https:[^"]+)"',
-                r'video_url\\":\\"(https:[^\\]+)',
-                r'property="og:video" content="(https:[^"]+)"',
-                r'content="(https://[^"]+\.mp4[^"]*)"',
-            ):
-                m = re.search(pat, html)
-                if m:
-                    video = _unescape(m.group(1))
-                    break
-            for pat in (
+            video, video_signal = _extract_embed_video(page_html)
+            # A /reel/ URL is itself a strong video-post signal. Its og:image
+            # is a poster frame, never the media payload.
+            original_path = urlparse(url).path.lower()
+            video_signal = video_signal or original_path.startswith(("/reel/", "/reels/"))
+            image = None
+            for pattern in (
                 r'"display_url"\s*:\s*"(https:[^"]+)"',
-                r'property="og:image" content="(https:[^"]+)"',
+                r'<meta[^>]+(?:property|name)=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']og:image["\']',
+                r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)',
             ):
-                m = re.search(pat, html)
-                if m:
-                    image = _unescape(m.group(1))
+                match = re.search(pattern, page_html, flags=re.IGNORECASE)
+                if match:
+                    image = html_lib.unescape(_unescape(match.group(1)))
                     break
+
             if video:
                 return {
                     "title": "Instagram Video", "uploader": "Instagram User",
@@ -486,6 +540,13 @@ def _from_embed(shortcode: str, url: str) -> dict | None:
                     "url": url, "webpage_url": url, "ext": "mp4",
                     "media_id": shortcode, "play_url": video, "source": "embed",
                 }
+
+            # og:image is only a preview. If metadata says this is a video but
+            # Instagram withheld the stream, let the other extractors try.
+            if video_signal:
+                logger.debug("IG embed identified video post but exposed no stream: %s", shortcode)
+                continue
+
             if image:
                 return {
                     "title": "Instagram Image", "uploader": "Instagram User",
@@ -498,7 +559,6 @@ def _from_embed(shortcode: str, url: str) -> dict | None:
         except Exception as e:
             logger.debug("IG embed %s: %s", path, e)
     return None
-
 
 def _from_gallery_dl(url: str) -> dict | None:
     try:
@@ -677,8 +737,16 @@ def scrape_instagram(url: str) -> dict | None:
             failures.append("resolver_timeout")
 
     if results:
-        results.sort(key=lambda r: int(r.get("provider_score") or 0), reverse=True)
-        best = results[0]
+        # Prefer an extracted playable video over a poster-only image result.
+        # Providers may return an og:image before they reveal the actual stream;
+        # never let that preview win when another provider found video media.
+        playable_videos = [
+            r for r in results
+            if r.get("media_type") == "video" and r.get("play_url")
+        ]
+        ranked = playable_videos or results
+        ranked.sort(key=lambda r: int(r.get("provider_score") or 0), reverse=True)
+        best = ranked[0]
         best["provider_candidates"] = [
             {
                 "source": r.get("source"),
@@ -686,7 +754,7 @@ def scrape_instagram(url: str) -> dict | None:
                 "score": r.get("provider_score"),
                 "cdn_ok": r.get("cdn_probe_ok") or r.get("image_probe_ok") or bool(r.get("album_probe_valid")),
             }
-            for r in results[:5]
+            for r in sorted(results, key=lambda item: int(item.get("provider_score") or 0), reverse=True)[:8]
         ]
         logger.info(
             "Instagram Pro selected source=%s type=%s score=%s candidates=%s",

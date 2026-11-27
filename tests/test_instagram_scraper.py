@@ -90,3 +90,68 @@ if __name__ == "__main__":
     test_cookie_header_propagates_sessionid()
     test_node_to_result_video_parses_duration_and_owner()
     print("instagram scraper tests passed")
+
+
+def test_embed_extracts_video_stream_from_json_metadata():
+    page = r'''<meta property="og:image" content="https://cdninstagram.com/poster.jpg">
+    <script>{"is_video": true, "video_url": "https:\/\/cdninstagram.com\/video.mp4"}</script>'''
+    video, is_video = ig._extract_embed_video(page)
+    assert is_video is True
+    assert video == "https://cdninstagram.com/video.mp4"
+
+
+def test_embed_never_returns_poster_as_video_download_when_video_stream_hidden(monkeypatch):
+    from types import SimpleNamespace
+    poster_only_video = (
+        '<html><meta property="og:image" content="https://cdninstagram.com/poster.jpg">'
+        '<script>{"is_video": true}</script>' + (" " * 400) + '</html>'
+    )
+    monkeypatch.setattr(ig, "_http_get", lambda *args, **kwargs: SimpleNamespace(text=poster_only_video))
+    assert ig._from_embed("ABC123", "https://www.instagram.com/reel/ABC123/") is None
+
+
+def test_embed_still_accepts_a_real_photo_post(monkeypatch):
+    from types import SimpleNamespace
+    photo = (
+        '<html><meta property="og:image" content="https://cdninstagram.com/photo.jpg">'
+        + (" " * 400) + '</html>'
+    )
+    monkeypatch.setattr(ig, "_http_get", lambda *args, **kwargs: SimpleNamespace(text=photo))
+    result = ig._from_embed("ABC123", "https://www.instagram.com/p/ABC123/")
+    assert result["media_type"] == "image"
+    assert result["image_url"] == "https://cdninstagram.com/photo.jpg"
+
+
+def test_playable_video_outranks_preview_image(monkeypatch):
+    monkeypatch.setattr(ig, "_probe_media_url", lambda *args, **kwargs: (True, 1000000, "video/mp4" if kwargs.get("kind") == "video" else "image/jpeg"))
+    video = {"source": "embed", "media_type": "video", "play_url": "https://cdninstagram.com/video.mp4"}
+    image = {"source": "graphql", "media_type": "image", "image_url": "https://cdninstagram.com/poster.jpg"}
+    assert ig._score_result(video) > ig._score_result(image)
+
+
+def test_reel_url_does_not_fall_back_to_og_image_when_stream_is_hidden(monkeypatch):
+    from types import SimpleNamespace
+    reel_page = (
+        '<html><meta property="og:image" content="https://cdninstagram.com/reel-poster.jpg">'
+        + (" " * 400) + '</html>'
+    )
+    monkeypatch.setattr(ig, "_http_get", lambda *args, **kwargs: SimpleNamespace(text=reel_page))
+    assert ig._from_embed("REEL123", "https://www.instagram.com/reel/REEL123/") is None
+
+
+def test_node_to_result_uses_video_versions_when_legacy_video_url_missing():
+    node = {
+        "__typename": "GraphVideo",
+        "video_versions": [
+            {"url": "https://cdninstagram.com/low.mp4", "width": 480, "height": 854},
+            {"url": "https://cdninstagram.com/high.mp4", "width": 1080, "height": 1920},
+        ],
+        "image_versions2": {"candidates": [
+            {"url": "https://cdninstagram.com/thumb.jpg", "width": 320, "height": 568},
+            {"url": "https://cdninstagram.com/thumb-hd.jpg", "width": 1080, "height": 1920},
+        ]},
+    }
+    result = ig._node_to_result(node, "https://www.instagram.com/p/ABC123/", "ABC123", "graphql")
+    assert result["media_type"] == "video"
+    assert result["play_url"] == "https://cdninstagram.com/high.mp4"
+    assert result["thumbnail"] == "https://cdninstagram.com/thumb-hd.jpg"
