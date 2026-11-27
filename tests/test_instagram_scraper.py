@@ -127,3 +127,13 @@ def test_playable_video_outranks_preview_image(monkeypatch):
     video = {"source": "embed", "media_type": "video", "play_url": "https://cdninstagram.com/video.mp4"}
     image = {"source": "graphql", "media_type": "image", "image_url": "https://cdninstagram.com/poster.jpg"}
     assert ig._score_result(video) > ig._score_result(image)
+
+
+def test_reel_url_does_not_fall_back_to_og_image_when_stream_is_hidden(monkeypatch):
+    from types import SimpleNamespace
+    reel_page = (
+        '<html><meta property="og:image" content="https://cdninstagram.com/reel-poster.jpg">'
+        + (" " * 400) + '</html>'
+    )
+    monkeypatch.setattr(ig, "_http_get", lambda *args, **kwargs: SimpleNamespace(text=reel_page))
+    assert ig._from_embed("REEL123", "https://www.instagram.com/reel/REEL123/") is None
