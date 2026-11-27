@@ -258,6 +258,41 @@ def _unescape(u: str) -> str:
         return u.replace("\\/", "/").replace("\\u0026", "&")
 
 
+def _best_media_candidate(items: list | None) -> str | None:
+    """Choose the highest-resolution URL from Instagram's changing media arrays."""
+    candidates = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        candidate = item.get("url") or item.get("src")
+        if not candidate:
+            continue
+        try:
+            width = int(item.get("width") or item.get("config_width") or 0)
+            height = int(item.get("height") or item.get("config_height") or 0)
+        except (TypeError, ValueError):
+            width = height = 0
+        candidates.append((width * height, width, _unescape(str(candidate))))
+    return max(candidates, default=(0, 0, None))[2]
+
+
+def _node_video_url(node: dict) -> str | None:
+    direct = _unescape(node.get("video_url") or "")
+    return direct or _best_media_candidate(
+        node.get("video_versions") or node.get("video_resources")
+    )
+
+
+def _node_image_url(node: dict) -> str | None:
+    direct = _unescape(node.get("display_url") or "")
+    resources = node.get("display_resources") or []
+    best = _best_media_candidate(resources)
+    if not best:
+        image_versions = node.get("image_versions2") or {}
+        best = _best_media_candidate(image_versions.get("candidates") or [])
+    return best or direct
+
+
 def _node_to_result(node: dict, url: str, shortcode: str, source: str) -> dict | None:
     if not isinstance(node, dict):
         return None
@@ -285,29 +320,22 @@ def _node_to_result(node: dict, url: str, shortcode: str, source: str) -> dict |
             c = edge.get("node") or edge
             if not isinstance(c, dict):
                 continue
-            if c.get("is_video") or c.get("__typename") == "GraphVideo":
-                vu = _unescape(c.get("video_url") or "")
+            child_video_url = _node_video_url(c)
+            if c.get("is_video") or c.get("__typename") == "GraphVideo" or child_video_url:
+                vu = child_video_url
                 if not vu:
                     continue
                 album_items.append({
                     "title": f"{title}_{i + 1}",
                     "url": vu,
-                    "thumbnail": _unescape(c.get("display_url") or ""),
+                    "thumbnail": _node_image_url(c) or "",
                     "image_url": None,
                     "type": "video",
                     "id": str(i),
                     "play_url": vu,
                 })
             else:
-                du = _unescape(c.get("display_url") or "")
-                resources = c.get("display_resources") or []
-                if resources:
-                    try:
-                        du = _unescape(sorted(
-                            resources, key=lambda r: int(r.get("config_width") or 0)
-                        )[-1].get("src") or du)
-                    except Exception:
-                        pass
+                du = _node_image_url(c) or ""
                 if not du:
                     continue
                 album_items.append({
@@ -326,25 +354,17 @@ def _node_to_result(node: dict, url: str, shortcode: str, source: str) -> dict |
             elif album_items:
                 media_type, image_url = "image", album_items[0]["image_url"]
                 album_items = []
-    elif node.get("is_video") or typename == "GraphVideo":
+    elif node.get("is_video") or typename == "GraphVideo" or _node_video_url(node):
         media_type = "video"
-        play_url = _unescape(node.get("video_url") or "")
-        image_url = _unescape(node.get("display_url") or "")
+        play_url = _node_video_url(node)
+        image_url = _node_image_url(node)
         try:
             duration_secs = int(float(node.get("video_duration") or 0))
         except Exception:
             duration_secs = 0
     else:
         media_type = "image"
-        image_url = _unescape(node.get("display_url") or "")
-        resources = node.get("display_resources") or []
-        if resources:
-            try:
-                image_url = _unescape(sorted(
-                    resources, key=lambda r: int(r.get("config_width") or 0)
-                )[-1].get("src") or image_url)
-            except Exception:
-                pass
+        image_url = _node_image_url(node)
 
     if not (image_url or play_url or album_items):
         return None
