@@ -493,6 +493,10 @@ def _from_embed(shortcode: str, url: str) -> dict | None:
             if len(page_html) < 300:
                 continue
             video, video_signal = _extract_embed_video(page_html)
+            # A /reel/ URL is itself a strong video-post signal. Its og:image
+            # is a poster frame, never the media payload.
+            original_path = urlparse(url).path.lower()
+            video_signal = video_signal or original_path.startswith(("/reel/", "/reels/"))
             image = None
             for pattern in (
                 r'"display_url"\s*:\s*"(https:[^"]+)"',
