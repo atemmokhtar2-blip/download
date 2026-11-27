@@ -450,25 +450,21 @@ def _from_public_api(shortcode: str, url: str) -> dict | None:
 
 
 def _extract_embed_video(html: str) -> tuple[str | None, bool]:
-    """Extract an actual video stream and separately detect video-post evidence.
-
-    Instagram frequently exposes a poster through og:image even when the post
-    is a Reel/video. The poster must never be treated as the downloadable media.
-    """
+    """Extract an actual video stream and separately detect video-post evidence."""
     source = html or ""
     patterns = (
-        r'"video_url"\\s*:\\s*"((?:https?:)?\\\\?/[^"]+|https:[^"]+)"',
-        r'video_url\\\\?":\\\\?"(https:[^\\\\"]+)',
-        r'<meta[^>]+(?:property|name)=["\\\'](?:og:video(?::url)?|twitter:player:stream)["\\\'][^>]+content=["\\\']([^"\\\']+)',
-        r'<meta[^>]+content=["\\\']([^"\\\']+)["\\\'][^>]+(?:property|name)=["\\\'](?:og:video(?::url)?|twitter:player:stream)["\\\']',
-        r'"contentUrl"\\s*:\\s*"(https:[^"]+)"',
-        r'<video[^>]+src=["\\\']([^"\\\']+)'
+        r'"video_url"\s*:\s*"(https:[^"]+)"',
+        r'video_url\\":\\"(https:[^\\"]+)',
+        r'<meta[^>]+(?:property|name)=["\'](?:og:video(?::url)?|twitter:player:stream)["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:video(?::url)?|twitter:player:stream)["\']',
+        r'"contentUrl"\s*:\s*"(https:[^"]+)"',
+        r'<video[^>]+src=["\']([^"\']+)'
     )
     video = None
     for pattern in patterns:
         match = re.search(pattern, source, flags=re.IGNORECASE)
         if match:
-            candidate = html_lib.unescape(_unescape(match.group(1))).replace("\\\\/", "/")
+            candidate = html_lib.unescape(_unescape(match.group(1))).replace("\\/", "/")
             if candidate.startswith("//"):
                 candidate = "https:" + candidate
             if candidate.startswith("https://"):
@@ -476,9 +472,9 @@ def _extract_embed_video(html: str) -> tuple[str | None, bool]:
                 break
 
     video_signal = bool(video) or bool(re.search(
-        r'"(?:is_video|isVideo)"\\s*:\\s*true|'
-        r'"__typename"\\s*:\\s*"GraphVideo"|'
-        r'<meta[^>]+(?:og:type|twitter:card)[^>]+content=["\\\'](?:video|player)',
+        r'"(?:is_video|isVideo)"\s*:\s*true|'
+        r'"__typename"\s*:\s*"GraphVideo"|'
+        r'<meta[^>]+(?:og:type|twitter:card)[^>]+content=["\'](?:video|player)',
         source, flags=re.IGNORECASE,
     ))
     return video, video_signal
@@ -499,10 +495,10 @@ def _from_embed(shortcode: str, url: str) -> dict | None:
             video, video_signal = _extract_embed_video(page_html)
             image = None
             for pattern in (
-                r'"display_url"\\s*:\\s*"(https:[^"]+)"',
-                r'<meta[^>]+(?:property|name)=["\\\']og:image["\\\'][^>]+content=["\\\']([^"\\\']+)',
-                r'<meta[^>]+content=["\\\']([^"\\\']+)["\\\'][^>]+(?:property|name)=["\\\']og:image["\\\']',
-                r'<meta[^>]+name=["\\\']twitter:image["\\\'][^>]+content=["\\\']([^"\\\']+)',
+                r'"display_url"\s*:\s*"(https:[^"]+)"',
+                r'<meta[^>]+(?:property|name)=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']og:image["\']',
+                r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)',
             ):
                 match = re.search(pattern, page_html, flags=re.IGNORECASE)
                 if match:
