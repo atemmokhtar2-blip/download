@@ -137,3 +137,21 @@ def test_reel_url_does_not_fall_back_to_og_image_when_stream_is_hidden(monkeypat
     )
     monkeypatch.setattr(ig, "_http_get", lambda *args, **kwargs: SimpleNamespace(text=reel_page))
     assert ig._from_embed("REEL123", "https://www.instagram.com/reel/REEL123/") is None
+
+
+def test_node_to_result_uses_video_versions_when_legacy_video_url_missing():
+    node = {
+        "__typename": "GraphVideo",
+        "video_versions": [
+            {"url": "https://cdninstagram.com/low.mp4", "width": 480, "height": 854},
+            {"url": "https://cdninstagram.com/high.mp4", "width": 1080, "height": 1920},
+        ],
+        "image_versions2": {"candidates": [
+            {"url": "https://cdninstagram.com/thumb.jpg", "width": 320, "height": 568},
+            {"url": "https://cdninstagram.com/thumb-hd.jpg", "width": 1080, "height": 1920},
+        ]},
+    }
+    result = ig._node_to_result(node, "https://www.instagram.com/p/ABC123/", "ABC123", "graphql")
+    assert result["media_type"] == "video"
+    assert result["play_url"] == "https://cdninstagram.com/high.mp4"
+    assert result["thumbnail"] == "https://cdninstagram.com/thumb-hd.jpg"
