@@ -5,7 +5,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from urllib.parse import parse_qsl
@@ -23,7 +22,7 @@ from database.downloads import (
 )
 from database.users import (
     ban_user, count_users, get_banned_users_count, get_new_users_today,
-    get_users_page, search_users, unban_user,
+    get_users_page, get_user, search_users, unban_user,
 )
 from middlewares.auth import is_admin
 from services.rbac import has_perm
@@ -110,13 +109,13 @@ def mini_admin_me(user: dict = Depends(require_admin)):
         "id": user["_id"],
         "first_name": str(user.get("first_name", ""))[:80],
         "username": str(user.get("username", ""))[:80],
+        "permissions": {"users": has_perm(user["_id"], "admin.users")},
     }
 
 
 @router.get("/api/mini-admin/dashboard")
 def mini_admin_dashboard(user: dict = Depends(require_admin)):
     from database.users import get_total_users
-    from services.runtime_diagnostics import render_diagnostics_html
 
     return {
         "metrics": {
@@ -146,12 +145,24 @@ def mini_admin_users(
     user: dict = Depends(require_admin),
 ):
     if q.strip():
-        rows = search_users(q.strip())[:limit]
+        rows = search_users(q.strip())
         if status == "active":
             rows = [row for row in rows if not row.get("is_banned")]
         elif status == "banned":
             rows = [row for row in rows if row.get("is_banned")]
-        return {"items": rows, "total": len(rows), "offset": 0, "limit": limit}
+        total = len(rows)
+        safe_rows = [{
+            "user_id": int(row["user_id"]),
+            "username": row.get("username") or "",
+            "first_name": row.get("first_name") or "",
+            "last_name": row.get("last_name") or "",
+            "is_banned": bool(row.get("is_banned")),
+            "language": row.get("language") or "",
+            "join_date": row.get("join_date"),
+            "last_seen": row.get("last_seen"),
+            "downloads": int(row.get("downloads") or 0),
+        } for row in rows[:limit]]
+        return {"items": safe_rows, "total": total, "offset": 0, "limit": limit}
     return {
         "items": get_users_page(offset=offset, limit=limit, status=None if status == "all" else status),
         "total": count_users(None if status == "all" else status),
@@ -164,6 +175,10 @@ def mini_admin_users(
 def mini_admin_ban(target_id: int, payload: BanRequest, user: dict = Depends(require_permission("admin.users"))):
     if target_id <= 0 or target_id == user["_id"]:
         raise HTTPException(status_code=400, detail="Invalid target user")
+    if not get_user(target_id):
+        raise HTTPException(status_code=404, detail="User not found")
+    if is_admin(target_id):
+        raise HTTPException(status_code=403, detail="Administrator accounts cannot be banned here")
     ban_user(target_id, payload.reason)
     log_admin_action(user["_id"], "mini_app_ban_user", target_id, payload.reason)
     return {"ok": True, "user_id": target_id, "is_banned": True}
@@ -173,6 +188,8 @@ def mini_admin_ban(target_id: int, payload: BanRequest, user: dict = Depends(req
 def mini_admin_unban(target_id: int, user: dict = Depends(require_permission("admin.users"))):
     if target_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid target user")
+    if not get_user(target_id):
+        raise HTTPException(status_code=404, detail="User not found")
     unban_user(target_id)
     log_admin_action(user["_id"], "mini_app_unban_user", target_id, "Telegram Mini App")
     return {"ok": True, "user_id": target_id, "is_banned": False}
