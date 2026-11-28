@@ -149,3 +149,6 @@ SUPPORTED_DOMAINS = [
 
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
+
+# HTTPS URL of the Telegram Mini App admin frontend (set to the deployed host's /mini-admin path).
+ADMIN_WEBAPP_URL = os.getenv("ADMIN_WEBAPP_URL", "").strip()

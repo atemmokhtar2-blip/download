@@ -1,15 +1,30 @@
 import logging
-from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from utils.button_text import strip_button_emoji, reply_button
 from telegram.ext import ContextTypes
 
-from config.settings import MAIN_BOT_USERNAME
+from config.settings import MAIN_BOT_USERNAME, ADMIN_WEBAPP_URL
 from database.users import get_user, create_user, update_user
 from middlewares.auth import is_admin, is_owner
 from locales import t
 from services.instance_manager import is_clone_bot
 
 logger = logging.getLogger(__name__)
+
+
+async def _send_mini_app_entry(update: Update) -> None:
+    """Expose the Mini App only to verified main-bot admins and only on HTTPS."""
+    url = ADMIN_WEBAPP_URL
+    if not url.startswith("https://"):
+        return
+    message = update.effective_message
+    if message is None:
+        return
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🩸 فتح XELVOR Control Center", web_app=WebAppInfo(url=url))
+    ]])
+    await message.reply_text("لوحة الإدارة المصغّرة جاهزة للفتح داخل Telegram:", reply_markup=keyboard)
+
 
 START_RETURN_GREETINGS = (
     "أهلاً بعودتك!\nابعت الرابط، وسيب الباقي عليّ.",
@@ -146,9 +161,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if is_owner(user.id):
                 from handlers.owner_panel import owner_command  # local import: avoids a circular dependency
                 await owner_command(update, context)
+                await _send_mini_app_entry(update)
                 return
             from handlers.admin import admin_command  # local import: avoids a circular dependency
             await admin_command(update, context)
+            await _send_mini_app_entry(update)
             return
 
     # Enforce mandatory subscription on /start as well as download/search actions.

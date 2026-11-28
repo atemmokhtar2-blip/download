@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import gradio as gr
 from fastapi import FastAPI
 
-from services import factory_api
+from services import factory_api, mini_admin
 
 
 def create_hosting_app(*, dashboard: gr.Blocks, dashboard_auth, temp_dir: str) -> FastAPI:
@@ -24,6 +24,7 @@ def create_hosting_app(*, dashboard: gr.Blocks, dashboard_auth, temp_dir: str) -
     # path. This preserves exact paths and handler dependencies while avoiding
     # a nested FastAPI router/app being swallowed by the root mount.
     web_app.router.routes.extend(factory_api.router.routes)
+    web_app.include_router(mini_admin.router)
 
     return gr.mount_gradio_app(
         web_app,
