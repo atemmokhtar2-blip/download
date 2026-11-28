@@ -202,3 +202,21 @@ export ADMIN_IDS="123456789,987654321"
 
 ---
 *Built with ❤️ using Python and yt-dlp.*
+
+
+## 🩸 XELVOR Telegram Mini App — لوحة الأدمن داخل Telegram
+
+اللوحة المصغّرة تعمل على نفس خدمة ASGI الحالية، ولا تنشئ Telegram polling process إضافيًا أو خدمة استضافة ثانية.
+
+### إعداد التشغيل
+1. انشر الفرع بعد المراجعة على نفس خدمة الاستضافة التي تشغّل `python app.py`.
+2. أضف متغير البيئة `ADMIN_WEBAPP_URL` بقيمة رابط HTTPS كامل ينتهي بـ `/mini-admin`، مثل `https://your-domain.example/mini-admin`.
+3. أعد تشغيل الخدمة. عند إرسال `/start` لحساب مالك أو أدمن في البوت الأساسي سيظهر زر فتح لوحة XELVOR داخل Telegram.
+4. تأكد من أن الدومين يعمل عبر HTTPS وأن إعدادات Web App في BotFather تشير إلى الدومين الصحيح عند الحاجة.
+
+### الأمان
+- لا يتم قبول Telegram user ID من المتصفح كهوية موثوقة.
+- كل طلب API يتحقق من توقيع `Telegram.WebApp.initData` باستخدام `TELEGRAM_BOT_TOKEN` على الخادم، ويرفض التوقيع غير الصحيح والجلسات المنتهية.
+- قراءة اللوحة تتطلب `admin.view`، وعمليات الحظر وفك الحظر تتطلب `admin.users` من نظام RBAC الحالي.
+- لا تسمح اللوحة بحظر حسابات الإدارة، وتسجل تغييرات الحظر في سجل تدقيق الإدارة.
+- لا تضع Telegram bot token في HTML أو JavaScript أو متغيرات عامة في المتصفح.
